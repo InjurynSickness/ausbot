@@ -2,7 +2,7 @@ const { Client, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder } = require
 const axios = require('axios');
 
 const config = {
-    token: 'MTMxODQxMDk5MTM5NDA5OTIzMQ.G_faem.djkhTrSNeUU5ULtmfO2_vYfJrZMO8gjsv0QDSs',
+    token: 'MTMxODQyMzQ4MTg1NTI0NjMzNg.GRhbPC.nbu1Im0jENLr30BjsMN6izdqIK6L607ZWsHyJQ',
     whitelistedUsers: new Set(['1175990722437066784', 'USER_ID_2']),
     baseUrl: 'https://api.earthmc.net/v3/aurora',
     maxWatchlistSize: 5
@@ -18,9 +18,20 @@ const client = new Client({
 
 const watchlist = new Map();
 const onlineStatus = new Map();
+const rateLimiter = {
+    lastCall: 0,
+    minInterval: 500
+};
 
 async function makeRequest(endpoint, method = 'GET', data = null) {
     try {
+        const now = Date.now();
+        const timeSinceLastCall = now - rateLimiter.lastCall;
+        if (timeSinceLastCall < rateLimiter.minInterval) {
+            await new Promise(resolve => setTimeout(resolve, rateLimiter.minInterval - timeSinceLastCall));
+        }
+        rateLimiter.lastCall = Date.now();
+        
         const response = await axios({
             method,
             url: `${config.baseUrl}/${endpoint}`,
@@ -681,11 +692,9 @@ client.on('interactionCreate', async interaction => {
     const { commandName } = interaction;
     
     try {
-        if (commands[commandName]) {
-            await interaction.deferReply();
-            const response = await commands[commandName](interaction);
-            await interaction.editReply(response);
-        }
+        await interaction.deferReply();
+        const response = await commands[commandName](interaction);
+        await interaction.editReply(response);
     } catch (error) {
         console.error(`Command error: ${error.message}`);
         await interaction.editReply('An error occurred while processing your command.');
@@ -710,7 +719,7 @@ client.on('presenceUpdate', async (oldPresence, newPresence) => {
 
 client.on('guildCreate', async guild => {
     try {
-        const invite = `https://discord.com/oauth2/authorize?client_id=1318410991394099231&permissions=8&scope=bot%20applications.commands`;
+        const invite = `https://discord.com/oauth2/authorize?client_id=1318423481855246336&permissions=8&scope=bot%20applications.commands`;
         console.log(`Bot invited to ${guild.name}. Invite link: ${invite}`);
     } catch (error) {
         console.error('Error handling guild join:', error); 
