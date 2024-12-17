@@ -395,3 +395,202 @@ EMC Links:
 
     async checkpremium(interaction) {
         const user = interaction.options.getUser('user');
+        return `Premium status check would go here for ${user.username}`;
+    },
+
+    async coords(interaction) {
+        const x = interaction.options.getInteger('x');
+        const z = interaction.options.getInteger('z');
+        
+        const locationData = await makeRequest('location', 'POST', {
+            query: [[x, z]]
+        });
+
+        if (locationData[0].isWilderness) {
+            return `Coordinates (${x}, ${z}) are in wilderness`;
+        }
+
+        return `Coordinates (${x}, ${z}) are in: ${locationData[0].town.name}`;
+    },
+
+    async locate(interaction) {
+        const name = interaction.options.getString('name');
+        const towns = await makeRequest('towns');
+        const nations = await makeRequest('nations');
+
+        const town = towns.find(t => t.name.toLowerCase() === name.toLowerCase());
+        if (town) {
+            const townData = await makeRequest('towns', 'POST', { query: [town.uuid] });
+            const coords = townData[0].coordinates.spawn;
+            return `${name} is a town at: https://earthmc.net/map/aurora/?zoom=6&x=${coords.x}&z=${coords.z}`;
+        }
+
+        const nation = nations.find(n => n.name.toLowerCase() === name.toLowerCase());
+        if (nation) {
+            const nationData = await makeRequest('nations', 'POST', { query: [nation.uuid] });
+            const coords = nationData[0].coordinates.spawn;
+            return `${name} is a nation at: https://earthmc.net/map/aurora/?zoom=6&x=${coords.x}&z=${coords.z}`;
+        }
+
+        return `${name} not found`;
+    },
+
+    async baltop(interaction) {
+        const category = interaction.options.getString('category') || 'residents';
+        let data;
+        
+        switch(category) {
+            case 'residents':
+                const players = await makeRequest('players');
+                data = await Promise.all(players.map(p => 
+                    makeRequest('players', 'POST', { query: [p.uuid] })
+                ));
+                data.sort((a, b) => b[0].stats.balance - a[0].stats.balance);
+                return data.slice(0, 10).map(p => 
+                    `${p[0].name}: ${p[0].stats.balance}g`
+                ).join('\n');
+                
+            case 'towns':
+                const towns = await makeRequest('towns');
+                data = await Promise.all(towns.map(t => 
+                    makeRequest('towns', 'POST', { query: [t.uuid] })
+                ));
+                data.sort((a, b) => b[0].stats.balance - a[0].stats.balance);
+                return data.slice(0, 10).map(t => 
+                    `${t[0].name}: ${t[0].stats.balance}g`
+                ).join('\n');
+                
+            case 'nations':
+                const nations = await makeRequest('nations');
+                data = await Promise.all(nations.map(n => 
+                    makeRequest('nations', 'POST', { query: [n.uuid] })
+                ));
+                data.sort((a, b) => b[0].stats.balance - a[0].stats.balance);
+                return data.slice(0, 10).map(n => 
+                    `${n[0].name}: ${n[0].stats.balance}g`
+                ).join('\n');
+        }
+    },
+
+    async economy() {
+        const [players, towns, nations] = await Promise.all([
+            makeRequest('players'),
+            makeRequest('towns'),
+            makeRequest('nations')
+        ]);
+
+        const [playerData, townData, nationData] = await Promise.all([
+            Promise.all(players.map(p => makeRequest('players', 'POST', { query: [p.uuid] }))),
+            Promise.all(towns.map(t => makeRequest('towns', 'POST', { query: [t.uuid] }))),
+            Promise.all(nations.map(n => makeRequest('nations', 'POST', { query: [n.uuid] })))
+        ]);
+
+        const totalPlayerGold = playerData.reduce((sum, p) => sum + p[0].stats.balance, 0);
+        const totalTownGold = townData.reduce((sum, t) => sum + t[0].stats.balance, 0);
+        const totalNationGold = nationData.reduce((sum, n) => sum + n[0].stats.balance, 0);
+
+        return `Total Economy:
+Players: ${totalPlayerGold}g
+Towns: ${totalTownGold}g
+Nations: ${totalNationGold}g
+Total: ${totalPlayerGold + totalTownGold + totalNationGold}g`;
+    },
+
+    async newday() {
+        const towns = await makeRequest('towns');
+        const fallingTowns = [];
+
+        for (const town of towns) {
+            const townData = await makeRequest('towns', 'POST', { query: [town.uuid] });
+            if (townData[0].stats.balance < townData[0].stats.upkeepCost) {
+                fallingTowns.push(townData[0].name);
+            }
+        }
+
+        return `Towns falling next newday: ${fallingTowns.join(', ')}`;
+    },
+
+    async towns_forsale() {
+        const towns = await makeRequest('towns');
+        const forsaleTowns = [];
+
+        for (const town of towns) {
+            const townData = await makeRequest('towns', 'POST', { query: [town.uuid] });
+            if (townData[0].status.isForSale && townData[0].stats.forSalePrice < 60000) {
+                forsaleTowns.push({
+                    name: townData[0].name,
+                    price: townData[0].stats.forSalePrice
+                });
+            }
+        }
+
+        return forsaleTowns
+            .sort((a, b) => a.price - b.price)
+            .map(t => `${t.name}: ${t.price}g`)
+            .join('\n');
+    }
+};
+
+// Command Registration
+const commandsData = [
+    new SlashCommandBuilder()
+        .setName('playercount')
+        .setDescription('Get current online player count'),
+    new SlashCommandBuilder()
+        .setName('commonspawns')
+        .setDescription('Get top 25 spawns by time spent')
+        .addStringOption(option =>
+            option.setName('date')
+                .setDescription('Date to check (YYYY-MM-DD)')
+                .setRequired(true)),
+    // Add other command definitions here
+];
+
+client.once('ready', async () => {
+    console.log('Bot is ready!');
+    try {
+        await client.application.commands.set(commandsData);
+    } catch (error) {
+        console.error('Error registering commands:', error);
+    }
+});
+
+client.on('interactionCreate', async interaction => {
+    if (!interaction.isCommand()) return;
+    
+    if (!isWhitelisted(interaction.user.id)) {
+        await interaction.reply('You are not authorized to use this bot.');
+        return;
+    }
+    
+    const { commandName } = interaction;
+    
+    try {
+        if (commands[commandName]) {
+            await interaction.deferReply();
+            const response = await commands[commandName](interaction);
+            await interaction.editReply(response);
+        }
+    } catch (error) {
+        console.error(`Command error: ${error.message}`);
+        await interaction.editReply('An error occurred while processing your command.');
+    }
+});
+
+client.on('presenceUpdate', async (oldPresence, newPresence) => {
+    const userId = newPresence.userId;
+    const status = newPresence.status;
+    
+    if (onlineStatus.get(userId) !== status) {
+        onlineStatus.set(userId, status);
+        
+        for (const [watcherId, watchedPlayers] of watchlist.entries()) {
+            if (watchedPlayers.has(userId)) {
+                const channel = await client.channels.fetch(watcherId);
+                await channel.send(`${userId} is now ${status}`);
+            }
+        }
+    }
+});
+
+client.login(config.token);
