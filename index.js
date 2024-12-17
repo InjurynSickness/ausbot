@@ -2,8 +2,8 @@ const { Client, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder } = require
 const axios = require('axios');
 
 const config = {
-    token: 'YOUR_BOT_TOKEN',
-    whitelistedUsers: new Set(['USER_ID_1', 'USER_ID_2']),
+    token: 'MTMxODQxMDk5MTM5NDA5OTIzMQ.G_faem.djkhTrSNeUU5ULtmfO2_vYfJrZMO8gjsv0QDSs',
+    whitelistedUsers: new Set(['1175990722437066784', 'USER_ID_2']),
     baseUrl: 'https://api.earthmc.net/v3/aurora',
     maxWatchlistSize: 5
 };
@@ -533,23 +533,138 @@ Total: ${totalPlayerGold + totalTownGold + totalNationGold}g`;
 
 // Command Registration
 const commandsData = [
-    new SlashCommandBuilder()
-        .setName('playercount')
-        .setDescription('Get current online player count'),
-    new SlashCommandBuilder()
-        .setName('commonspawns')
+    new SlashCommandBuilder().setName('playercount').setDescription('Get current online player count'),
+    
+    new SlashCommandBuilder().setName('commonspawns')
         .setDescription('Get top 25 spawns by time spent')
-        .addStringOption(option =>
-            option.setName('date')
-                .setDescription('Date to check (YYYY-MM-DD)')
-                .setRequired(true)),
-    // Add other command definitions here
+        .addStringOption(option => option.setName('date').setDescription('Date (YYYY-MM-DD)').setRequired(true)),
+        
+    new SlashCommandBuilder().setName('frequentspawns')
+        .setDescription('Get top 25 most visited spawns')
+        .addStringOption(option => option.setName('date').setDescription('Date (YYYY-MM-DD)').setRequired(true)),
+        
+    new SlashCommandBuilder().setName('visits')
+        .setDescription('Get visit statistics')
+        .addStringOption(option => option.setName('location').setDescription('Town/Nation name').setRequired(true)),
+        
+    new SlashCommandBuilder().setName('playeractivity')
+        .setDescription('Get player activity stats')
+        .addStringOption(option => option.setName('player').setDescription('Player name').setRequired(true)),
+        
+    new SlashCommandBuilder().setName('overclaim')
+        .setDescription('List overclaimed towns'),
+        
+    new SlashCommandBuilder().setName('respurge')
+        .setDescription('Check resident last online times')
+        .addStringOption(option => option.setName('town').setDescription('Town name').setRequired(true)),
+        
+    new SlashCommandBuilder().setName('forsalenear')
+        .setDescription('Find towns for sale nearby')
+        .addStringOption(option => option.setName('town').setDescription('Town name').setRequired(true))
+        .addIntegerOption(option => option.setName('range').setDescription('Search range')),
+        
+    new SlashCommandBuilder().setName('town_falling')
+        .setDescription('View falling towns'),
+        
+    new SlashCommandBuilder().setName('fallingin')
+        .setDescription('View falling towns in nation')
+        .addStringOption(option => option.setName('nation').setDescription('Nation name').setRequired(true)),
+        
+    new SlashCommandBuilder().setName('watch')
+        .setDescription('Watch a player')
+        .addStringOption(option => option.setName('player').setDescription('Player name').setRequired(true)),
+        
+    new SlashCommandBuilder().setName('unwatch')
+        .setDescription('Stop watching a player')
+        .addStringOption(option => option.setName('player').setDescription('Player name').setRequired(true)),
+        
+    new SlashCommandBuilder().setName('watchlist')
+        .setDescription('View your watched players'),
+        
+    new SlashCommandBuilder().setName('permson')
+        .setDescription('List towns with permissions on'),
+        
+    new SlashCommandBuilder().setName('flagson')
+        .setDescription('List towns with flags on')
+        .addStringOption(option => option.setName('filter').setDescription('Flag type')),
+        
+    new SlashCommandBuilder().setName('vp')
+        .setDescription('Check votes needed for Vote Party'),
+        
+    new SlashCommandBuilder().setName('discord')
+        .setDescription('Get Discord ID from username')
+        .addStringOption(option => option.setName('username').setDescription('Minecraft username').setRequired(true)),
+        
+    new SlashCommandBuilder().setName('username')
+        .setDescription('Get username from Discord ID')
+        .addStringOption(option => option.setName('discordid').setDescription('Discord ID').setRequired(true)),
+        
+    new SlashCommandBuilder().setName('staff')
+        .setDescription('View online staff'),
+        
+    new SlashCommandBuilder().setName('seen')
+        .setDescription('Check player last seen')
+        .addStringOption(option => option.setName('player').setDescription('Player name').setRequired(true)),
+        
+    new SlashCommandBuilder().setName('online')
+        .setDescription('View online players in town/nation')
+        .addStringOption(option => option.setName('location').setDescription('Town/Nation name').setRequired(true))
+        .addStringOption(option => option.setName('type').setDescription('Town or Nation').setRequired(true)),
+        
+    new SlashCommandBuilder().setName('npcs')
+        .setDescription('List all NPCs'),
+        
+    new SlashCommandBuilder().setName('recentspawns')
+        .setDescription('View recent spawns')
+        .addStringOption(option => option.setName('player').setDescription('Player name').setRequired(true)),
+        
+    new SlashCommandBuilder().setName('links')
+        .setDescription('Get EMC-related links'),
+        
+    new SlashCommandBuilder().setName('listnations')
+        .setDescription('List nations by filter')
+        .addStringOption(option => option.setName('filter').setDescription('Sort filter').setRequired(true)),
+        
+    new SlashCommandBuilder().setName('listtowns')
+        .setDescription('List towns by filter')
+        .addStringOption(option => option.setName('filter').setDescription('Sort filter').setRequired(true)),
+        
+    new SlashCommandBuilder().setName('calculatepurge')
+        .setDescription('Calculate player purge date')
+        .addStringOption(option => option.setName('player').setDescription('Player name').setRequired(true)),
+        
+    new SlashCommandBuilder().setName('checkpremium')
+        .setDescription('Check premium status')
+        .addUserOption(option => option.setName('user').setDescription('Discord user').setRequired(true)),
+        
+    new SlashCommandBuilder().setName('coords')
+        .setDescription('Check coordinates location')
+        .addIntegerOption(option => option.setName('x').setDescription('X coordinate').setRequired(true))
+        .addIntegerOption(option => option.setName('z').setDescription('Z coordinate').setRequired(true)),
+        
+    new SlashCommandBuilder().setName('locate')
+        .setDescription('Get location info and map link')
+        .addStringOption(option => option.setName('name').setDescription('Town/Nation name').setRequired(true)),
+        
+    new SlashCommandBuilder().setName('baltop')
+        .setDescription('View richest players/towns/nations')
+        .addStringOption(option => option.setName('category').setDescription('Category type').setRequired(true)),
+        
+    new SlashCommandBuilder().setName('economy')
+        .setDescription('View total economy stats'),
+        
+    new SlashCommandBuilder().setName('newday')
+        .setDescription('View towns falling next newday'),
+        
+    new SlashCommandBuilder().setName('towns_forsale')
+        .setDescription('List towns for sale')
 ];
 
 client.once('ready', async () => {
     console.log('Bot is ready!');
     try {
         await client.application.commands.set(commandsData);
+        console.log('Slash commands registered successfully');
     } catch (error) {
         console.error('Error registering commands:', error);
     }
@@ -590,6 +705,15 @@ client.on('presenceUpdate', async (oldPresence, newPresence) => {
                 await channel.send(`${userId} is now ${status}`);
             }
         }
+    }
+});
+
+client.on('guildCreate', async guild => {
+    try {
+        const invite = `https://discord.com/oauth2/authorize?client_id=1318410991394099231&permissions=8&scope=bot%20applications.commands`;
+        console.log(`Bot invited to ${guild.name}. Invite link: ${invite}`);
+    } catch (error) {
+        console.error('Error handling guild join:', error); 
     }
 });
 
