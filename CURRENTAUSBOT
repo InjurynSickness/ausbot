@@ -1,0 +1,510 @@
+const { Client, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const axios = require('axios');
+
+class Config {
+    static token = 'MTMxODQyMzQ4MTg1NTI0NjMzNg.GOA8J-.uG8Cq--J5-wll-UAMasYicMeGMqz8juFi47pqY';
+    static whitelistedUsers = new Set(['1175990722437066784']);
+    static baseUrl = 'https://api.earthmc.net/v3/aurora';
+}
+
+class EarthMCClient {
+    static cache = new Map();
+    static cacheTime = 60000;
+    static rateLimiter = {
+        lastCall: 0,
+        minInterval: 1000
+    };
+
+    static async makeRequest(endpoint, method = 'GET', data = null) {
+        const cacheKey = `${endpoint}-${method}-${JSON.stringify(data)}`;
+        const cached = this.cache.get(cacheKey);
+        
+        if (cached && Date.now() - cached.timestamp < this.cacheTime) {
+            return cached.data;
+        }
+
+        await this.handleRateLimit();
+        try {
+            const response = await axios({
+                method,
+                url: `${Config.baseUrl}/${endpoint}`,
+                data
+            });
+            
+            this.cache.set(cacheKey, {
+                data: response.data,
+                timestamp: Date.now()
+            });
+            
+            return response.data;
+        } catch (error) {
+            console.error(`API Error: ${error.message}`);
+            throw error;
+        }
+    }
+
+    static async handleRateLimit() {
+        const now = Date.now();
+        const timeSinceLastCall = now - this.rateLimiter.lastCall;
+        if (timeSinceLastCall < this.rateLimiter.minInterval) {
+            await new Promise(resolve => 
+                setTimeout(resolve, this.rateLimiter.minInterval - timeSinceLastCall)
+            );
+        }
+        this.rateLimiter.lastCall = Date.now();
+    }
+
+    static clearCache() {
+        this.cache.clear();
+    }
+}
+
+class Commands {
+    static getNextNewday() {
+        const now = new Date();
+        const nyTime = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+        
+        // Set to next 5 AM NY time
+        const nextNewday = new Date(nyTime);
+        nextNewday.setHours(5, 0, 0, 0);
+        
+        // If it's past 5 AM NY time today, move to tomorrow
+        if (nyTime.getHours() >= 5) {
+            nextNewday.setDate(nextNewday.getDate() + 1);
+        }
+
+        // Convert back to UTC for Discord timestamps
+        const offset = now.getTime() - nyTime.getTime();
+        return new Date(nextNewday.getTime() + offset);
+    }
+
+    static willFallNextNewday(lastOnline) {
+        const now = new Date();
+        const daysSinceLogin = Math.floor((now - lastOnline) / (24 * 60 * 60 * 1000));
+        
+        // If they've been offline for at least 41 days, they'll fall at next newday
+        return daysSinceLogin >= 41;
+    }
+
+    static calculateDaysUntilPurge(lastOnline) {
+        if (this.willFallNextNewday(lastOnline)) {
+            return 0; // Will fall at next newday
+        }
+        
+        const now = new Date();
+        const daysSinceLogin = Math.floor((now - lastOnline) / (24 * 60 * 60 * 1000));
+        return Math.max(0, 42 - daysSinceLogin);
+    }
+
+    static async playercount() {
+        const data = await EarthMCClient.makeRequest('');
+        const embed = new EmbedBuilder()
+            .setTitle('📊 Player Count')
+            .setDescription(`**Current Online Players:** ${data.stats.numOnlinePlayers}`)
+            .setColor('#2ecc71')
+            .setTimestamp();
+        return { embeds: [embed] };
+    }
+
+    static async overclaim() {
+        const towns = await EarthMCClient.makeRequest('towns');
+        const townQueries = towns.map(t => t.uuid);
+        const townData = await EarthMCClient.makeRequest('towns', 'POST', { query: townQueries });
+        
+        const overclaimedTowns = townData.filter(t => t.status.isOverClaimed).map(t => t.name);
+        
+        const embed = new EmbedBuilder()
+            .setTitle('🚫 Overclaimed Towns')
+            .setDescription(overclaimedTowns.length ? overclaimedTowns.join(', ') : 'No overclaimed towns found')
+            .setColor('#e74c3c')
+            .setTimestamp()
+            .setFooter({ text: `Total: ${overclaimedTowns.length} towns` });
+        return { embeds: [embed] };
+    }
+
+    static async respurge(town) {
+        const townData = await EarthMCClient.makeRequest('towns', 'POST', { query: [town] });
+        if (!townData[0]) return { content: 'Town not found' };
+
+        const residentQueries = townData[0].residents.map(r => r.uuid);
+        const residentsData = await EarthMCClient.makeRequest('players', 'POST', { query: residentQueries });
+
+        const sortedResidents = residentsData
+            .sort((a, b) => new Date(a.timestamps.lastOnline) - new Date(b.timestamps.lastOnline))
+            .map(r => {
+                const lastOnline = new Date(r.timestamps.lastOnline);
+                return `${r.name}: <t:${Math.floor(lastOnline.getTime() / 1000)}:R>`;
+            });
+
+        const embed = new EmbedBuilder()
+            .setTitle(`👥 Resident Purge Times - ${town}`)
+            .setDescription(sortedResidents.join('\n'))
+            .setColor('#3498db')
+            .setTimestamp()
+            .setFooter({ text: `Total: ${sortedResidents.length} residents` });
+        return { embeds: [embed] };
+    }
+
+    static async fallingin(nation, days = 42) {
+        const nationData = await EarthMCClient.makeRequest('nations', 'POST', { query: [nation] });
+        if (!nationData[0]) return { content: 'Nation not found' };
+        
+        const townQueries = nationData[0].towns.map(t => t.uuid);
+        const townsData = await EarthMCClient.makeRequest('towns', 'POST', { query: townQueries });
+        
+        const mayorQueries = townsData.map(t => t.mayor.uuid);
+        const mayorsData = await EarthMCClient.makeRequest('players', 'POST', { query: mayorQueries });
+        
+        const nextNewday = this.getNextNewday();
+        const now = new Date();
+        
+        // Calculate days until falling for each town based on mayor's last login
+        const townsFalling = townsData
+            .map(town => {
+                const mayor = mayorsData.find(m => m.uuid === town.mayor.uuid);
+                if (!mayor) return null;
+
+                const lastOnline = new Date(mayor.timestamps.lastOnline);
+                const daysSinceLogin = Math.floor((now - lastOnline) / (24 * 60 * 60 * 1000));
+                
+                let daysUntilFalling = 42 - daysSinceLogin;
+                let fallsNextNewday = false;
+                
+                // Check if town will fall at next newday
+                if (daysSinceLogin >= 41) {
+                    const hoursUntilNewday = (nextNewday - now) / (1000 * 60 * 60);
+                    if (hoursUntilNewday < 24) {
+                        daysUntilFalling = 0;
+                        fallsNextNewday = true;
+                    }
+                }
+
+                return {
+                    name: town.name,
+                    mayor: mayor.name,
+                    daysUntilFalling,
+                    fallsNextNewday,
+                    lastOnline
+                };
+            })
+            // Only show towns falling at next newday or within 14 days
+            .filter(town => town && (town.fallsNextNewday || (town.daysUntilFalling <= 14)))
+            .sort((a, b) => {
+                // Sort by fallsNextNewday first, then by daysUntilFalling
+                if (a.fallsNextNewday && !b.fallsNextNewday) return -1;
+                if (!a.fallsNextNewday && b.fallsNextNewday) return 1;
+                return a.daysUntilFalling - b.daysUntilFalling;
+            });
+
+        if (townsFalling.length === 0) {
+            return {
+                embeds: [new EmbedBuilder()
+                    .setTitle(`💸 Falling Towns in ${nation}`)
+                    .setDescription('No towns falling at next newday or within 14 days')
+                    .setColor('#e67e22')
+                    .setTimestamp()]
+            };
+        }
+
+        let description = '';
+        
+        // Add all towns with consistent formatting
+        townsFalling.forEach(town => {
+            let emoji;
+            if (town.fallsNextNewday) emoji = '⚠️';
+            else if (town.daysUntilFalling <= 3) emoji = '🔴';
+            else if (town.daysUntilFalling <= 7) emoji = '🟡';
+            else emoji = '🟢';
+            
+            description += `${emoji} **${town.name}**\n` +
+                         `┗ ${town.fallsNextNewday ? 
+                             `Falls at: next newday (<t:${Math.floor(nextNewday.getTime() / 1000)}:R>)` : 
+                             `Falls in: \`${town.daysUntilFalling}\` days`}\n` +
+                         `┗ Mayor: \`${town.mayor}\` (Last online: <t:${Math.floor(town.lastOnline.getTime() / 1000)}:R>)\n\n`;
+        });
+
+        // If description is too long, create a summary
+        if (description.length > 4000) {
+            const nextNewdayTowns = townsFalling.filter(t => t.fallsNextNewday);
+            const otherTowns = townsFalling.filter(t => !t.fallsNextNewday);
+            
+            description = `Too many towns to display full details.\n\n` +
+                         `⚠️ Falling next newday: ${nextNewdayTowns.length}\n` +
+                         `🔴 Critical (≤3 days): ${otherTowns.filter(t => t.daysUntilFalling <= 3).length}\n` +
+                         `🟡 Warning (4-7 days): ${otherTowns.filter(t => t.daysUntilFalling > 3 && t.daysUntilFalling <= 7).length}\n` +
+                         `🟢 Normal (8-14 days): ${otherTowns.filter(t => t.daysUntilFalling > 7).length}\n\n` +
+                         `Towns falling at next newday:\n` +
+                         nextNewdayTowns.map(t => `- ${t.name}`).join('\n') + '\n\n' +
+                         `Other towns at risk:\n` +
+                         otherTowns.map(t => `- ${t.name} (${t.daysUntilFalling}d)`).join('\n');
+        }
+
+        return {
+            embeds: [new EmbedBuilder()
+                .setTitle(`💸 Falling Towns in ${nation}`)
+                .setDescription(description)
+                .setColor('#e67e22')
+                .setTimestamp()
+                .setFooter({ 
+                    text: `⚠️ Next newday | 🔴 ≤ 3 days | 🟡 ≤ 7 days | 🟢 8-14 days | Next newday: ${nextNewday.toLocaleString()} UTC` 
+                })]
+        };
+    }
+
+    static async permson() {
+        const towns = await EarthMCClient.makeRequest('towns');
+        const townQueries = towns.map(t => t.uuid);
+        const townsData = await EarthMCClient.makeRequest('towns', 'POST', { query: townQueries });
+        
+        const townsWithPerms = townsData
+            .filter(t => Object.values(t.perms).some(perm => perm.some(p => p === true)))
+            .map(t => t.name);
+
+        const embed = new EmbedBuilder()
+            .setTitle('🔓 Towns with Permissions')
+            .setDescription(townsWithPerms.length ? townsWithPerms.join(', ') : 'No towns with permissions found')
+            .setColor('#f1c40f')
+            .setTimestamp()
+            .setFooter({ text: `Total: ${townsWithPerms.length} towns` });
+        return { embeds: [embed] };
+    }
+
+    static async flagson(filter = null) {
+        const towns = await EarthMCClient.makeRequest('towns');
+        const townQueries = towns.map(t => t.uuid);
+        const townsData = await EarthMCClient.makeRequest('towns', 'POST', { query: townQueries });
+        
+        const townsWithFlags = townsData
+            .filter(t => filter ? 
+                t.perms.flags[filter] : 
+                Object.values(t.perms.flags).some(flag => flag === true)
+            )
+            .map(t => t.name);
+
+        const embed = new EmbedBuilder()
+            .setTitle('🚩 Towns with Flags')
+            .setDescription(townsWithFlags.length ? townsWithFlags.join(', ') : 'No towns with flags found')
+            .setColor('#9b59b6')
+            .setTimestamp()
+            .setFooter({ text: `Total: ${townsWithFlags.length} towns${filter ? ` | Filter: ${filter}` : ''}` });
+        return { embeds: [embed] };
+    }
+
+    static async vp() {
+        const data = await EarthMCClient.makeRequest('');
+        const embed = new EmbedBuilder()
+            .setTitle('🗳️ Vote Party Progress')
+            .setDescription(`**Votes needed:** ${data.voteParty.numRemaining}`)
+            .setColor('#1abc9c')
+            .setTimestamp();
+        return { embeds: [embed] };
+    }
+
+    static async seen(player) {
+        const playerData = await EarthMCClient.makeRequest('players', 'POST', { query: [player] });
+        if (!playerData[0]) return { content: 'Player not found' };
+        
+        const lastOnline = new Date(playerData[0].timestamps.lastOnline);
+        const status = playerData[0].status.isOnline ? 
+            '🟢 Currently Online' : 
+            `🔴 Last seen <t:${Math.floor(lastOnline.getTime() / 1000)}:R>`;
+
+        const embed = new EmbedBuilder()
+            .setTitle(`👤 Player Status - ${player}`)
+            .setDescription(status)
+            .setColor(playerData[0].status.isOnline ? '#2ecc71' : '#e74c3c')
+            .setTimestamp();
+        return { embeds: [embed] };
+    }
+
+    static async online(location, type) {
+        const getOnlinePlayers = async (residents) => {
+            const residentQueries = residents.map(r => r.uuid);
+            const playersData = await EarthMCClient.makeRequest('players', 'POST', { query: residentQueries });
+            return playersData.filter(p => p.status.isOnline).map(p => p.name);
+        };
+
+        let onlineResidents = [];
+        let locationName = '';
+
+        if (type === 'town') {
+            const townData = await EarthMCClient.makeRequest('towns', 'POST', { query: [location] });
+            if (!townData[0]) return { content: 'Town not found' };
+            onlineResidents = await getOnlinePlayers(townData[0].residents);
+            locationName = townData[0].name;
+        } else {
+            const nationData = await EarthMCClient.makeRequest('nations', 'POST', { query: [location] });
+            if (!nationData[0]) return { content: 'Nation not found' };
+            
+            const townQueries = nationData[0].towns.map(t => t.uuid);
+            const townsData = await EarthMCClient.makeRequest('towns', 'POST', { query: townQueries });
+            
+            const allResidents = townsData.flatMap(t => t.residents);
+            onlineResidents = await getOnlinePlayers(allResidents);
+            locationName = nationData[0].name;
+        }
+
+        const embed = new EmbedBuilder()
+            .setTitle(`🎮 Online Players - ${type === 'town' ? '🏠' : '👑'} ${locationName}`)
+            .setDescription(onlineResidents.length ? onlineResidents.join(', ') : 'No online players')
+            .setColor('#3498db')
+            .setTimestamp()
+            .setFooter({ text: `Total: ${onlineResidents.length} players online` });
+        return { embeds: [embed] };
+    }
+
+    static async calculatepurge(player) {
+        const playerData = await EarthMCClient.makeRequest('players', 'POST', { query: [player] });
+        if (!playerData[0]) return { content: 'Player not found' };
+
+        const lastOnline = new Date(playerData[0].timestamps.lastOnline);
+        // Calculate purge date (42 days after last login, at 5am EST)
+        const purgeDate = new Date(lastOnline);
+        purgeDate.setDate(purgeDate.getDate() + 42);
+        // Set to 5am EST on purge day
+        purgeDate.setUTCHours(10, 0, 0, 0); // 5am EST = 10am UTC
+
+        const embed = new EmbedBuilder()
+            .setTitle(`⏰ Purge Calculator - ${player}`)
+            .addFields(
+                { name: 'Last Online', value: `<t:${Math.floor(lastOnline.getTime() / 1000)}:F>`, inline: true },
+                { name: 'Purges On', value: `<t:${Math.floor(purgeDate.getTime() / 1000)}:F>`, inline: true }
+            )
+            .setColor('#95a5a6')
+            .setTimestamp();
+        return { embeds: [embed] };
+    }
+
+    static async towns_forsale() {
+        const towns = await EarthMCClient.makeRequest('towns');
+        const townQueries = towns.map(t => t.uuid);
+        const townsData = await EarthMCClient.makeRequest('towns', 'POST', { query: townQueries });
+        
+        const forsaleTowns = townsData
+            .filter(t => t.status.isForSale && t.stats.forSalePrice < 60000)
+            .map(t => ({
+                name: t.name,
+                price: t.stats.forSalePrice
+            }))
+            .sort((a, b) => a.price - b.price);
+
+        const embed = new EmbedBuilder()
+            .setTitle('💰 Towns For Sale')
+            .setDescription(
+                forsaleTowns.length ? 
+                forsaleTowns.map(t => `${t.name}: ${t.price}g`).join('\n') : 
+                'No towns for sale'
+            )
+            .setColor('#f39c12')
+            .setTimestamp()
+            .setFooter({ text: `Total: ${forsaleTowns.length} towns` });
+        return { embeds: [embed] };
+    }
+}
+
+const commandsData = [
+    new SlashCommandBuilder().setName('playercount').setDescription('Get current online player count'),
+    new SlashCommandBuilder().setName('overclaim').setDescription('List overclaimed towns'),
+    new SlashCommandBuilder()
+        .setName('respurge')
+        .setDescription('Check resident last online times')
+        .addStringOption(option => option.setName('town').setDescription('Town name').setRequired(true)),
+    new SlashCommandBuilder()
+        .setName('fallingin')
+        .setDescription('List falling towns in a nation')
+        .addStringOption(option => 
+            option.setName('nation')
+                .setDescription('Nation name')
+                .setRequired(true))
+        .addIntegerOption(option => 
+            option.setName('days')
+                .setDescription('Days until falling (1-42)')
+                .setMinValue(1)
+                .setMaxValue(42)
+                .setRequired(false)),
+    new SlashCommandBuilder().setName('permson').setDescription('List towns with permissions enabled'),
+    new SlashCommandBuilder()
+        .setName('flagson')
+        .setDescription('List towns with flags enabled')
+        .addStringOption(option => option.setName('filter').setDescription('Flag type filter').setRequired(false)),
+    new SlashCommandBuilder().setName('vp').setDescription('Check votes needed for next Vote Party'),
+    new SlashCommandBuilder()
+        .setName('seen')
+        .setDescription('Check when a player was last online')
+        .addStringOption(option => option.setName('player').setDescription('Player name').setRequired(true)),
+    new SlashCommandBuilder()
+        .setName('online')
+        .setDescription('List online players in a town/nation')
+        .addStringOption(option => option.setName('location').setDescription('Town/Nation name').setRequired(true))
+        .addStringOption(option => 
+            option.setName('type')
+            .setDescription('Location type')
+            .setRequired(true)
+            .addChoices(
+                { name: 'Town', value: 'town' },
+                { name: 'Nation', value: 'nation' }
+            )
+        ),
+    new SlashCommandBuilder()
+        .setName('calculatepurge')
+        .setDescription('Calculate when a player will purge')
+        .addStringOption(option => option.setName('player').setDescription('Player name').setRequired(true)),
+    new SlashCommandBuilder()
+        .setName('towns_forsale')
+        .setDescription('List towns for sale'),
+    new SlashCommandBuilder()
+        .setName('newday')
+        .setDescription('List towns falling next newday')
+];
+
+const client = new Client({
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages
+    ]
+});
+
+client.once('ready', async () => {
+    console.log('AUSTRALIA BOT ACTIVATE!');
+    try {
+        await client.application.commands.set(commandsData);
+        console.log('Slash commands registered successfully');
+        
+        setInterval(() => {
+            EarthMCClient.clearCache();
+            console.log('Cache cleared');
+        }, 300000);
+    } catch (error) {
+        console.error('Error registering commands:', error);
+    }
+});
+
+client.on('interactionCreate', async interaction => {
+    if (!interaction.isCommand()) return;
+    
+    try {
+        if (!Config.whitelistedUsers.has(interaction.user.id)) {
+            return await interaction.reply({
+                content: 'Not authorized',
+                ephemeral: true
+            });
+        }
+        
+        await interaction.deferReply();
+        const response = await Commands[interaction.commandName](
+            ...interaction.options.data.map(opt => opt.value)
+        );
+        
+        await interaction.editReply(response);
+    } catch (error) {
+        console.error(`Error in command ${interaction.commandName}:`, error);
+        const errorEmbed = new EmbedBuilder()
+            .setTitle('❌ Error')
+            .setDescription('An error occurred while processing your command.')
+            .setColor('#ff0000')
+            .setTimestamp();
+        await interaction.editReply({ embeds: [errorEmbed] });
+    }
+});
+
+client.login(Config.token);
