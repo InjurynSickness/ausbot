@@ -1,10 +1,12 @@
 // src/index.js
 const { Client, GatewayIntentBits } = require('discord.js');
 const Config = require('./config/config');
-console.log("Current working directory:", process.cwd());
-console.log("ENV token:", process.env.BOT_TOKEN);
 const EarthMCClient = require('./services/earthmc');
+const DataCollector = require('./services/dataCollector');
 const commands = require('./commands');
+
+// Import the datacollect command to set up the reference
+const dataCollectCommand = require('./commands/datacollect');
 
 const client = new Client({
    intents: [
@@ -13,10 +15,17 @@ const client = new Client({
    ]
 });
 
+let dataCollector;
+
 client.once('ready', async () => {
    console.log('AUSBOT ACTIVATE!');
    try {
        await Config.loadAuthorizedUsers();
+       
+       // Initialize data collector
+       dataCollector = new DataCollector();
+       dataCollectCommand.setDataCollector(dataCollector);
+       console.log('Data collector initialized');
        
        // Use guild-specific command registration for faster updates during testing
        const guild = client.guilds.cache.get('1187819440277037076');
@@ -28,9 +37,10 @@ client.once('ready', async () => {
            await client.application.commands.set(commands.data);
        }
        
+       // Clear EarthMC API cache every 5 minutes
        setInterval(() => {
            EarthMCClient.clearCache();
-           console.log('Cache cleared');
+           console.log('EarthMC API cache cleared');
        }, 300000);
    } catch (error) {
        console.error('Error during startup:', error);
@@ -57,6 +67,12 @@ client.on('interactionCreate', async interaction => {
 
        // Government command - handle authorization checks within the command
        if (interaction.commandName === 'government') {
+           await interaction.deferReply();
+           return await command.execute(interaction);
+       }
+
+       // Data collection and graph commands - check whitelist authorization
+       if (['datacollect', 'graph'].includes(interaction.commandName)) {
            await interaction.deferReply();
            return await command.execute(interaction);
        }
