@@ -1,4 +1,3 @@
-// src/commands/datacollect.js
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const Config = require('../config/config');
 const Database = require('../services/database');

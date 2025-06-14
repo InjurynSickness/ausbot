@@ -1,4 +1,3 @@
-// src/commands/admin.js
 const { SlashCommandBuilder } = require('discord.js');
 const Config = require('../config/config');
 const { CHECK, X_MARK, FALLBACK } = require('../utils/emojis');

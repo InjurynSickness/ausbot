@@ -1,4 +1,3 @@
-// src/commands/graph.js
 const { SlashCommandBuilder, EmbedBuilder, AttachmentBuilder } = require('discord.js');
 const { ChartJSNodeCanvas } = require('chartjs-node-canvas');
 const Database = require('../services/database');

@@ -31,7 +31,7 @@ const commands = {
     async fallingin(interaction) {
         
         const nation = interaction.options.getString('nation');
-        const days = interaction.options.getInteger('days') || 42;
+        const days = interaction.options.getInteger('days') || 42; // Default to 42 instead of hardcoded 14
         
         const nationData = await EarthMCClient.makeRequest('nations', 'POST', { query: [nation] });
         if (!nationData[0]) return interaction.editReply('Nation not found');
@@ -72,13 +72,13 @@ const commands = {
                     lastOnline
                 };
             })
-            .filter(town => town && (town.fallsNextNewday || (town.daysUntilFalling <= 14)))
+            .filter(town => town && (town.fallsNextNewday || (town.daysUntilFalling <= days && town.daysUntilFalling >= 0))) // Use the days parameter
             .sort((a, b) => a.daysUntilFalling - b.daysUntilFalling);
 
         if (townsFalling.length === 0) {
             const embed = new EmbedBuilder()
                 .setTitle(`💸 Falling Towns in ${nation}`)
-                .setDescription('No towns falling within specified timeframe')
+                .setDescription(`No towns falling within ${days} days`)
                 .setColor('#FF0000')
                 .setTimestamp();
             return interaction.editReply({ embeds: [embed] });
@@ -108,7 +108,7 @@ const commands = {
 
         // Send first page
         const firstEmbed = new EmbedBuilder()
-            .setTitle(`💸 Falling Towns in ${nation}${pages.length > 1 ? ' (Page 1/' + pages.length + ')' : ''}`)
+            .setTitle(`💸 Falling Towns in ${nation}${pages.length > 1 ? ' (Page 1/' + pages.length + ')' : ''} (≤${days} days)`)
             .setDescription(pages[0])
             .setColor('#FF0000')
             .setTimestamp()
@@ -119,7 +119,7 @@ const commands = {
         // Send follow-up pages if any
         for (let i = 1; i < pages.length; i++) {
             const embed = new EmbedBuilder()
-                .setTitle(`💸 Falling Towns in ${nation} (Page ${i + 1}/${pages.length})`)
+                .setTitle(`💸 Falling Towns in ${nation} (Page ${i + 1}/${pages.length}) (≤${days} days)`)
                 .setDescription(pages[i])
                 .setColor('#FF0000')
                 .setTimestamp()
@@ -168,7 +168,7 @@ module.exports = {
                     .setRequired(true))
             .addIntegerOption(option => 
                 option.setName('days')
-                    .setDescription('Days until falling (1-42)')
+                    .setDescription('Days until falling (1-42, default: 42)')
                     .setMinValue(1)
                     .setMaxValue(42)
                     .setRequired(false)),

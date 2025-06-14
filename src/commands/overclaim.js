@@ -1,4 +1,3 @@
-// src/commands/overclaim.js
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const EarthMCClient = require('../services/earthmc');
 const TimeUtils = require('../utils/time');

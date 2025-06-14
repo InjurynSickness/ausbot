@@ -39,7 +39,7 @@ client.once('ready', async () => {
        
        // Clear EarthMC API cache every 5 minutes
        setInterval(() => {
-           EarthMCClient.clearCache();
+           EarthMC.clearCache();
            console.log('EarthMC API cache cleared');
        }, 300000);
    } catch (error) {
@@ -65,11 +65,11 @@ client.on('interactionCreate', async interaction => {
            return await command.execute(interaction);
        }
 
-       // Government command - handle authorization checks within the command
-       if (interaction.commandName === 'government') {
-           await interaction.deferReply();
-           return await command.execute(interaction);
-       }
+       // Government command - COMMENTED OUT FOR NOW
+       // if (interaction.commandName === 'government') {
+       //     await interaction.deferReply();
+       //     return await command.execute(interaction);
+       // }
 
        // Data collection and graph commands - check whitelist authorization
        if (['datacollect', 'graph'].includes(interaction.commandName)) {
