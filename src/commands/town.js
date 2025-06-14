@@ -1,5 +1,6 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const EarthMCClient = require('../services/earthmc');
+const { CHECK, X_MARK, FALLBACK } = require('../utils/emojis');
 
 const data = new SlashCommandBuilder()
     .setName('town')
@@ -25,76 +26,91 @@ async function execute(interaction) {
 
         const embed = new EmbedBuilder()
             .setTitle(`Town Information for ${townInfo.name}`)
-            .setColor('#2ecc71')
-            .addFields(
-                { 
-                    name: 'Board', 
-                    value: townInfo.board || 'None',
-                    inline: false
-                },
-                {
-                    name: 'Mayor',
-                    value: townInfo.mayor.name || 'Unknown',
-                    inline: false
-                },
-                {
-                    name: 'Nation',
-                    value: townInfo.nation ? townInfo.nation.name : 'None',
-                    inline: true
-                },
-                {
-                    name: 'Size',
-                    value: `Chunks: ${townInfo.stats.numTownBlocks || 0}/${townInfo.stats.maxTownBlocks || 0}`,
-                    inline: true
-                },
-                {
-                    name: 'Wealth',
-                    value: `Bank: ${townInfo.stats.balance || 0}G`,
-                    inline: true
-                }
-            );
+            .setColor('#FF0000');
 
-        // Status Section
-        embed.addFields({ 
-            name: 'Town Status', 
-            value: `Public: ${townInfo.perms?.public ? '✅' : '❌'}\nOpen: ${townInfo.perms?.build ? '✅' : '❌'}\nCapital: ${townInfo.status?.isCapital ? '✅' : '❌'}`, 
-            inline: true 
-        });
+        // First row: Board, Nation, Mayor
+        embed.addFields(
+            { name: 'Board', value: townInfo.board || 'None', inline: true },
+            { name: 'Nation', value: townInfo.nation ? townInfo.nation.name : 'None', inline: true },
+            { name: 'Mayor', value: townInfo.mayor.name || 'Unknown', inline: true }
+        );
 
-        // Flags Section
-        if (townInfo.perms?.flags) {
-            embed.addFields({
-                name: 'Flags',
-                value: `PvP: ${townInfo.perms.flags.pvp ? '✅' : '❌'}\nExplosions: ${townInfo.perms.flags.explosions ? '✅' : '❌'}\nFire: ${townInfo.perms.flags.fire ? '✅' : '❌'}\nMobs: ${townInfo.perms.flags.mobs ? '✅' : '❌'}`,
-                inline: true
-            });
-        }
+        // Second row: Remove the old nation row
+        // embed.addFields(
+        //     { name: 'Nation', value: townInfo.nation ? townInfo.nation.name : 'None', inline: true },
+        //     { name: '\u200b', value: '\u200b', inline: true },
+        //     { name: '\u200b', value: '\u200b', inline: true }
+        // );
 
-        // Overclaim Status
-        embed.addFields({
-            name: 'Overclaim Status',
-            value: `Over limit: ${townInfo.status?.isOverClaimed ? '✅' : '❌'}\nShield: ${townInfo.status?.hasOverclaimShield ? '✅' : '❌'}`,
-            inline: true
-        });
+        // Third row: Residents, Outlaws, Trusted counts with lists below each
+        const residentsCount = townInfo.residents?.length || 0;
+        const outlawsCount = townInfo.outlaws?.length || 0;
+        const trustedCount = townInfo.trusted?.length || 0;
 
-        // Residents Section
-        const residentsNames = townInfo.residents.map(r => r.name);
-        const residentsCount = residentsNames.length;
-        let residentsDisplay = residentsNames.slice(0, 15).join(', ');
-        if (residentsCount > 15) {
-            residentsDisplay += '...';
-        }
-        embed.addFields({ 
-            name: `Residents [${residentsCount}]`, 
-            value: residentsDisplay || 'None', 
-            inline: false 
-        });
+        // Residents section
+        const residentsDisplay = residentsCount > 0 ? 
+            `**[${residentsCount}]**\n\`\`\`\n${residentsCount > 20 ? 
+                townInfo.residents.slice(0, 20).map(r => r.name).join(', ') + `, and ${residentsCount - 20} more...` :
+                townInfo.residents.map(r => r.name).join(', ')
+            }\n\`\`\`` : 
+            `**[0]**\n\`\`\`\nNone\n\`\`\``;
 
-        // Ranks Section
+        // Outlaws section  
+        const outlawsDisplay = outlawsCount > 0 ? 
+            `**[${outlawsCount}]**\n\`\`\`\n${outlawsCount > 20 ?
+                townInfo.outlaws.slice(0, 20).map(o => o.name).join(', ') + `, and ${outlawsCount - 20} more...` :
+                townInfo.outlaws.map(o => o.name).join(', ')
+            }\n\`\`\`` : 
+            `**[0]**\n\`\`\`\nNone\n\`\`\``;
+
+        // Trusted section
+        const trustedDisplay = trustedCount > 0 ? 
+            `**[${trustedCount}]**\n\`\`\`\n${trustedCount > 20 ?
+                townInfo.trusted.slice(0, 20).map(t => t.name).join(', ') + `, and ${trustedCount - 20} more...` :
+                townInfo.trusted.map(t => t.name).join(', ')
+            }\n\`\`\`` : 
+            `**[0]**\n\`\`\`\nNone\n\`\`\``;
+
+        embed.addFields(
+            { name: 'Residents', value: residentsDisplay, inline: true },
+            { name: 'Outlaws', value: outlawsDisplay, inline: true },
+            { name: 'Trusted', value: trustedDisplay, inline: true }
+        );
+
+        // Fourth row: Status, Stats, Flags
+        const statusValues = [
+            `Public: ${townInfo.perms?.public ? (CHECK || FALLBACK.CHECK) : (X_MARK || FALLBACK.X_MARK)}`,
+            `Open: ${townInfo.perms?.build ? (CHECK || FALLBACK.CHECK) : (X_MARK || FALLBACK.X_MARK)}`,
+            `Capital: ${townInfo.status?.isCapital ? (CHECK || FALLBACK.CHECK) : (X_MARK || FALLBACK.X_MARK)}`,
+            `Overclaimed: ${townInfo.status?.isOverClaimed ? (CHECK || FALLBACK.CHECK) : (X_MARK || FALLBACK.X_MARK)}`,
+            `Overclaim Shield: ${townInfo.status?.hasOverclaimShield ? (CHECK || FALLBACK.CHECK) : (X_MARK || FALLBACK.X_MARK)}`,
+            `Ruined: ${townInfo.status?.isRuined ? (CHECK || FALLBACK.CHECK) : (X_MARK || FALLBACK.X_MARK)}`
+        ];
+
+        const statsValues = [
+            `Size: ${townInfo.stats?.numTownBlocks || 0}/${townInfo.stats?.maxTownBlocks || 0}`,
+            `Outlaws: [${outlawsCount}]`,
+            `Bank: ${townInfo.stats?.balance || 0}G`
+        ];
+
+        const flagValues = [
+            `pvp: ${townInfo.perms?.flags?.pvp ? (CHECK || FALLBACK.CHECK) : (X_MARK || FALLBACK.X_MARK)}`,
+            `explosions: ${townInfo.perms?.flags?.explosions ? (CHECK || FALLBACK.CHECK) : (X_MARK || FALLBACK.X_MARK)}`,
+            `fire: ${townInfo.perms?.flags?.fire ? (CHECK || FALLBACK.CHECK) : (X_MARK || FALLBACK.X_MARK)}`,
+            `mobs: ${townInfo.perms?.flags?.mobs ? (CHECK || FALLBACK.CHECK) : (X_MARK || FALLBACK.X_MARK)}`
+        ];
+
+        embed.addFields(
+            { name: 'Status', value: statusValues.join('\n'), inline: true },
+            { name: 'Stats', value: statsValues.join('\n'), inline: true },
+            { name: 'Flags', value: flagValues.join('\n'), inline: true }
+        );
+
+        // Ranks Section (if any)
         if (townInfo.ranks) {
             const ranksList = Object.entries(townInfo.ranks)
                 .filter(([_, players]) => players.length > 0)
-                .map(([rank, players]) => `${rank}: ${players.join(', ')}`)
+                .map(([rank, players]) => `**${rank}:** ${players.join(', ')}`)
                 .join('\n');
 
             if (ranksList) {
@@ -106,28 +122,7 @@ async function execute(interaction) {
             }
         }
 
-        // Trusted Players Section
-        if (townInfo.trusted?.length > 0) {
-            const trustedDisplay = townInfo.trusted.map(t => t.name).slice(0, 15).join(', ') + 
-                (townInfo.trusted.length > 15 ? '...' : '');
-            embed.addFields({
-                name: `Trusted [${townInfo.trusted.length}]`,
-                value: trustedDisplay,
-                inline: false
-            });
-        }
-
-        // Outlaws Section
-        if (townInfo.outlaws?.length > 0) {
-            const outlawsDisplay = townInfo.outlaws.map(o => o.name).slice(0, 15).join(', ') + 
-                (townInfo.outlaws.length > 15 ? '...' : '');
-            embed.addFields({
-                name: `Outlaws [${townInfo.outlaws.length}]`,
-                value: outlawsDisplay,
-                inline: false
-            });
-        }
-
+        // Rank at bottom (if available)
         if (townInfo.rank) {
             embed.addFields({
                 name: 'Rank',

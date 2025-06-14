@@ -23,7 +23,7 @@ const commands = {
         const embed = new EmbedBuilder()
             .setTitle('🗳️ Vote Party Progress')
             .setDescription(`**Votes needed:** ${data.voteParty.numRemaining}`)
-            .setColor('#1abc9c')
+            .setColor('#FF0000')
             .setTimestamp();
         return interaction.editReply({ embeds: [embed] });
     },
@@ -79,7 +79,7 @@ const commands = {
             const embed = new EmbedBuilder()
                 .setTitle(`💸 Falling Towns in ${nation}`)
                 .setDescription('No towns falling within specified timeframe')
-                .setColor('#e67e22')
+                .setColor('#FF0000')
                 .setTimestamp();
             return interaction.editReply({ embeds: [embed] });
         }
@@ -110,7 +110,7 @@ const commands = {
         const firstEmbed = new EmbedBuilder()
             .setTitle(`💸 Falling Towns in ${nation}${pages.length > 1 ? ' (Page 1/' + pages.length + ')' : ''}`)
             .setDescription(pages[0])
-            .setColor('#e67e22')
+            .setColor('#FF0000')
             .setTimestamp()
             .setFooter(footer);
 
@@ -121,7 +121,7 @@ const commands = {
             const embed = new EmbedBuilder()
                 .setTitle(`💸 Falling Towns in ${nation} (Page ${i + 1}/${pages.length})`)
                 .setDescription(pages[i])
-                .setColor('#e67e22')
+                .setColor('#FF0000')
                 .setTimestamp()
                 .setFooter(footer);
 
@@ -147,7 +147,7 @@ const commands = {
         const embed = new EmbedBuilder()
             .setTitle(`👥 Resident Purge Times - ${town}`)
             .setDescription(sortedResidents.join('\n'))
-            .setColor('#3498db')
+            .setColor('#FF0000')
             .setTimestamp()
             .setFooter({ text: `Total: ${sortedResidents.length} residents` });
         return interaction.editReply({ embeds: [embed] });

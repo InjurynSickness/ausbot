@@ -1,0 +1,12 @@
+{
+  "primeMinister": null,
+  "deputyPrimeMinister": null,
+  "parliament": [],
+  "maxSeats": 15,
+  "cabinet": [],
+  "advisors": [],
+  "nextElection": null,
+  "campaignStart": null,
+  "regent": null,
+  "regentVoteDate": null
+}

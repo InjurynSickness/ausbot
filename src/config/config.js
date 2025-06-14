@@ -1,10 +1,10 @@
-// src/config/config.js
 const fs = require('fs/promises');
 const path = require('path');
 
 class Config {
     static token = "MTMxODQyMzQ4MTg1NTI0NjMzNg.GnvwX6.MFFNf0A2_i4xceb4WzJj90BFsuxQGqlzzrEHTY";
     static whitelistedUsers = new Set(['1175990722437066784']);
+    static whitelistEnabled = true; // Default to whitelist enabled
     static baseUrl = 'https://api.earthmc.net/v3/aurora';
     static authFile = path.join(__dirname, '../../authorized_users.json');
 
@@ -13,7 +13,9 @@ class Config {
             const data = await fs.readFile(Config.authFile, 'utf8');
             const parsed = JSON.parse(data);
             Config.whitelistedUsers = new Set(parsed.whitelistedUsers);
+            Config.whitelistEnabled = parsed.whitelistEnabled !== undefined ? parsed.whitelistEnabled : true;
             console.log('Loaded authorized users:', [...Config.whitelistedUsers]);
+            console.log('Whitelist enabled:', Config.whitelistEnabled);
         } catch (error) {
             console.log('Creating new authorized users file');
             await Config.saveAuthorizedUsers();
@@ -25,10 +27,11 @@ class Config {
             await fs.writeFile(
                 Config.authFile,
                 JSON.stringify({
-                    whitelistedUsers: [...Config.whitelistedUsers]
+                    whitelistedUsers: [...Config.whitelistedUsers],
+                    whitelistEnabled: Config.whitelistEnabled
                 }, null, 2)
             );
-            console.log('Saved authorized users');
+            console.log('Saved authorized users and whitelist settings');
         } catch (error) {
             console.error('Error saving authorized users:', error);
         }

@@ -1,4 +1,3 @@
-// src/services/earthmc.js
 const axios = require('axios');
 const Config = require('../config/config');
 

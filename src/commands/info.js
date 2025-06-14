@@ -1,4 +1,3 @@
-// src/commands/info.js
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const EarthMCClient = require('../services/earthmc');
 
@@ -8,7 +7,7 @@ const commands = {
         const embed = new EmbedBuilder()
             .setTitle('📊 Player Count')
             .setDescription(`**Current Online Players:** ${data.stats.numOnlinePlayers}`)
-            .setColor('#2ecc71')
+            .setColor('#FF0000')
             .setTimestamp();
         return interaction.editReply({ embeds: [embed] });
     },
@@ -26,7 +25,7 @@ const commands = {
         const embed = new EmbedBuilder()
             .setTitle(`👤 Player Status - ${player}`)
             .setDescription(status)
-            .setColor(playerData[0].status.isOnline ? '#2ecc71' : '#e74c3c')
+            .setColor(playerData[0].status.isOnline ? '#FF0000' : '#FF0000')
             .setTimestamp();
             
         return interaction.editReply({ embeds: [embed] });

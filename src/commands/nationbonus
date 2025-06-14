@@ -1,0 +1,145 @@
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const EarthMCClient = require('../services/earthmc');
+const TimeUtils = require('../utils/time');
+
+// Nation bonus thresholds
+const BONUS_THRESHOLDS = [
+    { residents: 200, bonus: 100 },
+    { residents: 120, bonus: 80 },
+    { residents: 80, bonus: 60 },
+    { residents: 60, bonus: 50 },
+    { residents: 40, bonus: 30 },
+    { residents: 20, bonus: 10 },
+    { residents: 0, bonus: 0 }
+];
+
+const getCurrentBonus = (residents) => {
+    for (const threshold of BONUS_THRESHOLDS) {
+        if (residents >= threshold.residents) {
+            return threshold.bonus;
+        }
+    }
+    return 0;
+};
+
+const data = new SlashCommandBuilder()
+    .setName('nationbonus')
+    .setDescription('Calculate when a nation will lose bonus chunks due to resident purges')
+    .addStringOption(option =>
+        option.setName('nation')
+            .setDescription('Name of the nation')
+            .setRequired(true));
+
+async function execute(interaction) {
+    const nationName = interaction.options.getString('nation');
+
+    try {
+        // Get nation data
+        const nationData = await EarthMCClient.makeRequest('nations', 'POST', { query: [nationName] });
+        if (!nationData[0]) {
+            return interaction.editReply('Nation not found.');
+        }
+
+        const nation = nationData[0];
+        const currentResidents = nation.stats.numResidents;
+        const currentBonus = getCurrentBonus(currentResidents);
+
+        // Get all towns in the nation
+        const townQueries = nation.towns.map(t => t.uuid);
+        const townsData = await EarthMCClient.makeRequest('towns', 'POST', { query: townQueries });
+
+        // Get all residents from all towns
+        const allResidentUuids = [];
+        for (const town of townsData) {
+            allResidentUuids.push(...town.residents.map(r => r.uuid));
+        }
+
+        // Remove duplicates (residents can only be in one town anyway, but just in case)
+        const uniqueResidentUuids = [...new Set(allResidentUuids)];
+
+        // Get resident data
+        const residentsData = await EarthMCClient.makeRequest('players', 'POST', { query: uniqueResidentUuids });
+
+        const now = new Date();
+        
+        // Calculate purge dates for all residents
+        const residentPurges = residentsData.map(resident => {
+            const lastOnline = new Date(resident.timestamps.lastOnline);
+            const daysSinceLogin = Math.floor((now - lastOnline) / (24 * 60 * 60 * 1000));
+            const purgeDate = new Date(lastOnline);
+            purgeDate.setDate(purgeDate.getDate() + 42);
+            purgeDate.setUTCHours(11, 0, 0, 0); // 6 AM EST = 11 AM UTC
+            
+            return {
+                name: resident.name,
+                purgeDate,
+                daysSinceLogin
+            };
+        }).sort((a, b) => a.purgeDate - b.purgeDate);
+
+        // Calculate bonus downgrades
+        const downgrades = [];
+        let remainingResidents = currentResidents;
+
+        for (let i = 0; i < residentPurges.length; i++) {
+            remainingResidents--;
+            const newBonus = getCurrentBonus(remainingResidents);
+            
+            // Check if this causes a bonus downgrade
+            if (newBonus < currentBonus && !downgrades.find(d => d.newBonus === newBonus)) {
+                const residentsLost = currentResidents - remainingResidents;
+                downgrades.push({
+                    newBonus,
+                    date: residentPurges[i].purgeDate,
+                    residentsLost
+                });
+            }
+        }
+
+        // Create embed
+        const embed = new EmbedBuilder()
+            .setTitle(`Nation Bonus Downgrade Info for ${nation.name}`)
+            .setColor('#FF0000');
+
+        // Current status in 3-column layout
+        embed.addFields(
+            { name: 'Current Residents', value: currentResidents.toString(), inline: true },
+            { name: 'Current Bonus', value: `${currentBonus} chunks`, inline: true },
+            { name: 'Total Towns', value: nation.towns.length.toString(), inline: true }
+        );
+
+        if (downgrades.length === 0) {
+            embed.addFields({
+                name: 'Downgrade Status',
+                value: 'No bonus downgrades expected from current resident purges.',
+                inline: false
+            });
+        } else {
+            // Add downgrades in a clean format
+            for (const downgrade of downgrades) {
+                const timestamp = Math.floor(downgrade.date.getTime() / 1000);
+                embed.addFields({
+                    name: `Downgrade to ${downgrade.newBonus} bonus`,
+                    value: `<t:${timestamp}:F> (losing ${downgrade.residentsLost} residents)`,
+                    inline: false
+                });
+            }
+        }
+
+        // Add next newday for reference
+        const nextNewday = TimeUtils.getNextNewday();
+        embed.addFields({
+            name: 'Next Newday',
+            value: `<t:${Math.floor(nextNewday.getTime() / 1000)}:F>`,
+            inline: false
+        });
+
+        return interaction.editReply({ embeds: [embed] });
+
+    } catch (error) {
+        console.error('Error calculating nation bonus downgrades:', error);
+        return interaction.editReply('An error occurred while calculating nation bonus information.');
+    }
+}
+
+module.exports = { data, execute };

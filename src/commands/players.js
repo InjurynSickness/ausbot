@@ -1,4 +1,3 @@
-// src/commands/players.js
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const EarthMCClient = require('../services/earthmc');
 
@@ -36,7 +35,7 @@ const commands = {
         const embed = new EmbedBuilder()
             .setTitle(`🎮 Online Players - ${type === 'town' ? '🏠' : '👑'} ${locationName}`)
             .setDescription(onlineResidents.length ? onlineResidents.join(', ') : 'No online players')
-            .setColor('#3498db')
+            .setColor('#FF0000')
             .setTimestamp()
             .setFooter({ text: `Total: ${onlineResidents.length} players online` });
         return interaction.editReply({ embeds: [embed] });
@@ -58,7 +57,7 @@ const commands = {
                 { name: 'Last Online', value: `<t:${Math.floor(lastOnline.getTime() / 1000)}:F>`, inline: true },
                 { name: 'Purges On', value: `<t:${Math.floor(purgeDate.getTime() / 1000)}:F>`, inline: true }
             )
-            .setColor('#95a5a6')
+            .setColor('#FF0000')
             .setTimestamp();
         return interaction.editReply({ embeds: [embed] });
     }

@@ -17,7 +17,16 @@ client.once('ready', async () => {
    console.log('AUSBOT ACTIVATE!');
    try {
        await Config.loadAuthorizedUsers();
-       await client.application.commands.set(commands.data);
+       
+       // Use guild-specific command registration for faster updates during testing
+       const guild = client.guilds.cache.get('1187819440277037076');
+       if (guild) {
+           await guild.commands.set(commands.data);
+           console.log(`Commands registered to guild: ${guild.name}`);
+       } else {
+           console.log('Guild not found, falling back to global commands');
+           await client.application.commands.set(commands.data);
+       }
        
        setInterval(() => {
            EarthMCClient.clearCache();
@@ -35,13 +44,27 @@ client.on('interactionCreate', async interaction => {
        const command = commands.get(interaction.commandName);
        if (!command) return;
 
-       if (interaction.commandName === 'authorize') {
+       // Admin commands - only allow owner
+       if (['authorize', 'whitelist'].includes(interaction.commandName)) {
+           if (interaction.user.id !== '1175990722437066784') {
+               return interaction.reply({
+                   content: 'Not authorized to use this command',
+                   ephemeral: true
+               });
+           }
            return await command.execute(interaction);
        }
 
-       if (!Config.whitelistedUsers.has(interaction.user.id)) {
+       // Government command - handle authorization checks within the command
+       if (interaction.commandName === 'government') {
+           await interaction.deferReply();
+           return await command.execute(interaction);
+       }
+
+       // Regular commands - check whitelist if enabled
+       if (Config.whitelistEnabled && !Config.whitelistedUsers.has(interaction.user.id)) {
            return await interaction.reply({
-               content: 'Not authorized',
+               content: 'This bot is currently in whitelist mode. You are not authorized to use commands.',
                ephemeral: true
            });
        }
