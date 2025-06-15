@@ -26,19 +26,20 @@ client.once('ready', async () => {
        dataCollectCommand.setDataCollector(dataCollector);
        console.log('Data collector initialized');
        
-       // Use guild-specific command registration for faster updates during testing
-       const guild = client.guilds.cache.get('1187819440277037076');
-       if (guild) {
-           await guild.commands.set(commands.data);
-           console.log(`Commands registered to guild: ${guild.name}`);
-       } else {
-           console.log('Guild not found, falling back to global commands');
-           await client.application.commands.set(commands.data);
+       // Register commands globally so they work on all servers
+       await client.application.commands.set(commands.data);
+       console.log('Commands registered globally');
+
+       // Also register to test guild for faster updates during development
+       const testGuild = client.guilds.cache.get('1187819440277037076');
+       if (testGuild) {
+           await testGuild.commands.set(commands.data);
+           console.log(`Commands also registered to test guild: ${testGuild.name}`);
        }
        
        // Clear EarthMC API cache every 5 minutes
        setInterval(() => {
-           EarthMCClient.clearCache(); // ✅ Fixed: Use EarthMCClient instead of EarthMC
+           EarthMCClient.clearCache();
            console.log('EarthMC API cache cleared');
        }, 300000);
    } catch (error) {
