@@ -1,4 +1,3 @@
-// src/index.js
 const { Client, GatewayIntentBits } = require('discord.js');
 const Config = require('./config/config');
 const EarthMCClient = require('./services/earthmc');
@@ -39,7 +38,7 @@ client.once('ready', async () => {
        
        // Clear EarthMC API cache every 5 minutes
        setInterval(() => {
-           EarthMC.clearCache();
+           EarthMCClient.clearCache(); // ✅ Fixed: Use EarthMCClient instead of EarthMC
            console.log('EarthMC API cache cleared');
        }, 300000);
    } catch (error) {

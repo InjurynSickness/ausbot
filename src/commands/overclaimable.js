@@ -18,11 +18,19 @@ const calculateNationBonus = (nationResidents) => {
 
 const data = new SlashCommandBuilder()
     .setName('overclaimable')
-    .setDescription('Calculate when a town will be overclaimable')
+    .setDescription('Calculate when a town will be overclaimable OR list overclaimable towns in a nation')
     .addStringOption(option =>
         option.setName('name')
-            .setDescription('Name of the town')
-            .setRequired(true));
+            .setDescription('Name of the town OR nation (use with list option)')
+            .setRequired(true))
+    .addBooleanOption(option =>
+        option.setName('list')
+            .setDescription('Set to true to list overclaimable towns in a nation within 7 days')
+            .setRequired(false))
+    .addBooleanOption(option =>
+        option.setName('ephemeral')
+            .setDescription('Set to true to make the response only visible to you')
+            .setRequired(false));
 
 async function execute(interaction) {
     // Check authorization
@@ -32,14 +40,25 @@ async function execute(interaction) {
         });
     }
 
-    const townName = interaction.options.getString('name');
+    const name = interaction.options.getString('name');
+    const isList = interaction.options.getBoolean('list') || false;
+    const isEphemeral = interaction.options.getBoolean('ephemeral') || false;
 
+    if (isList) {
+        return await handleOverclaimableList(interaction, name, isEphemeral);
+    } else {
+        return await handleSingleTown(interaction, name, isEphemeral);
+    }
+}
+
+async function handleSingleTown(interaction, townName, isEphemeral) {
     try {
         const towns = await EarthMCClient.makeRequest('towns');
         const town = towns.find(t => t.name.toLowerCase() === townName.toLowerCase());
         
         if (!town) {
-            return interaction.editReply('Town not found.');
+            const response = { content: 'Town not found.', ephemeral: isEphemeral };
+            return isEphemeral ? interaction.followUp(response) : interaction.editReply(response);
         }
 
         const townData = await EarthMCClient.makeRequest('towns', 'POST', { query: [town.uuid] });
@@ -166,10 +185,198 @@ async function execute(interaction) {
             inline: false
         });
 
-        return interaction.editReply({ embeds: [embed] });
+        const response = { embeds: [embed], ephemeral: isEphemeral };
+        return isEphemeral ? interaction.followUp(response) : interaction.editReply(response);
+
     } catch (error) {
         console.error('Error calculating overclaim status:', error);
-        return interaction.editReply('An error occurred while calculating overclaim status.');
+        const response = { content: 'An error occurred while calculating overclaim status.', ephemeral: isEphemeral };
+        return isEphemeral ? interaction.followUp(response) : interaction.editReply(response);
+    }
+}
+
+async function handleOverclaimableList(interaction, nation, isEphemeral) {
+    const daysAhead = 7; // Fixed to 7 days as requested
+    
+    try {
+        // Get nation data
+        const nationData = await EarthMCClient.makeRequest('nations', 'POST', { query: [nation] });
+        if (!nationData[0]) {
+            const response = { content: 'Nation not found.', ephemeral: isEphemeral };
+            return isEphemeral ? interaction.followUp(response) : interaction.editReply(response);
+        }
+
+        const nationInfo = nationData[0];
+        const nationBonus = calculateNationBonus(nationInfo.stats.numResidents);
+        
+        // Get all towns in the nation
+        const townQueries = nationInfo.towns.map(t => t.uuid);
+        const townsData = await EarthMCClient.makeRequest('towns', 'POST', { query: townQueries });
+        
+        // Get all mayors for last online data
+        const mayorQueries = townsData.map(t => t.mayor.uuid);
+        const mayorsData = await EarthMCClient.makeRequest('players', 'POST', { query: mayorQueries });
+        
+        const now = new Date();
+        const nextNewday = TimeUtils.getNextNewday();
+        
+        // Process each town
+        const townAnalysis = townsData.map(town => {
+            const mayor = mayorsData.find(m => m.uuid === town.mayor.uuid);
+            if (!mayor) return null;
+
+            const currentChunks = town.stats.numTownBlocks;
+            const currentResidents = town.residents.length;
+            const maxChunksAllowed = (currentResidents * CHUNKS_PER_RESIDENT) + nationBonus;
+            const isCurrentlyOverclaimed = currentChunks > maxChunksAllowed;
+            
+            // Only look for future overclaimable towns, not currently overclaimed ones
+            let willBeOverclaimable = false;
+            let daysUntilOverclaimable = null;
+            
+            if (!isCurrentlyOverclaimed) {
+                // Calculate minimum chunks allowed (mayor only + nation bonus)
+                const minChunksAllowed = (1 * CHUNKS_PER_RESIDENT) + nationBonus; // 1 = mayor only
+                
+                // First check: Can this town EVER be overclaimable through resident purges?
+                if (currentChunks <= minChunksAllowed) {
+                    // Town can NEVER be overclaimable through resident purges
+                    // because even with just the mayor, they have enough chunk allowance
+                    willBeOverclaimable = false;
+                } else {
+                    // Town CAN become overclaimable if enough residents purge
+                    // Calculate how many residents need to purge to make it overclaimable
+                    for (let lostResidents = 1; lostResidents <= currentResidents - 1; lostResidents++) {
+                        const remainingResidents = currentResidents - lostResidents;
+                        const futureMaxChunks = (remainingResidents * CHUNKS_PER_RESIDENT) + nationBonus;
+                        
+                        if (currentChunks > futureMaxChunks) {
+                            // This would make the town overclaimable
+                            // Only include if it's realistic (few residents need to purge and within timeframe)
+                            if (lostResidents <= 3 && lostResidents * 2 <= daysAhead) {
+                                willBeOverclaimable = true;
+                                daysUntilOverclaimable = Math.min(daysAhead, lostResidents * 2);
+                            }
+                            break;
+                        }
+                    }
+                }
+                
+                // Mayor purge check: Only matters if ALL residents would purge around the same time
+                // When mayor purges, mayorship transfers to another resident, so town doesn't become ruins
+                // Town only becomes ruins if ALL residents purge, not just the mayor
+                // We already handled the resident purge scenarios above, so no additional mayor-specific logic needed
+            }
+            
+            return {
+                ...town,
+                mayor,
+                isCurrentlyOverclaimed,
+                willBeOverclaimable,
+                daysUntilOverclaimable,
+                currentChunks,
+                maxChunksAllowed,
+                minChunksAllowed: (1 * CHUNKS_PER_RESIDENT) + nationBonus,
+                chunksOverLimit: Math.max(0, currentChunks - maxChunksAllowed),
+                nationBonus
+            };
+        }).filter(town => town && town.willBeOverclaimable && !town.isCurrentlyOverclaimed) // Only future overclaimable, not currently overclaimed
+          .sort((a, b) => {
+              // Sort by days until overclaimable
+              if (a.daysUntilOverclaimable !== null && b.daysUntilOverclaimable !== null) {
+                  return a.daysUntilOverclaimable - b.daysUntilOverclaimable;
+              }
+              return 0;
+          });
+
+        if (townAnalysis.length === 0) {
+            const embed = new EmbedBuilder()
+                .setTitle(`💸 Future Overclaimable Towns - ${nation}`)
+                .setDescription(`No towns will be overclaimable within ${daysAhead} days.`)
+                .setColor('#00FF00')
+                .addFields(
+                    { name: 'Nation Bonus', value: `${nationBonus} chunks`, inline: true },
+                    { name: 'Total Towns', value: nationInfo.towns.length.toString(), inline: true },
+                    { name: 'Nation Residents', value: nationInfo.stats.numResidents.toString(), inline: true }
+                )
+                .setTimestamp();
+            
+            const response = { embeds: [embed], ephemeral: isEphemeral };
+            return isEphemeral ? interaction.followUp(response) : interaction.editReply(response);
+        }
+
+        // Create response content
+        const DISCORD_DESCRIPTION_LIMIT = 4096;
+        let pages = [];
+        let currentPage = '';
+        
+        for (const town of townAnalysis) {
+            const emoji = town.daysUntilOverclaimable === 0 ? '⚠️' :
+                         town.daysUntilOverclaimable <= 3 ? '🟡' : '🟢';
+            
+            // Calculate the date when town becomes overclaimable
+            const overclaimableDate = new Date();
+            overclaimableDate.setDate(overclaimableDate.getDate() + town.daysUntilOverclaimable);
+            const timestamp = Math.floor(overclaimableDate.getTime() / 1000);
+            
+            let statusText;
+            if (town.daysUntilOverclaimable === 0) {
+                statusText = `Overclaimable at next newday`;
+            } else {
+                statusText = `Overclaimable: <t:${timestamp}:D>`;
+            }
+            
+            const townString = `${emoji} **${town.name}** | Chunks: ${town.currentChunks}/${town.maxChunksAllowed} | Mayor: \`${town.mayor.name}\` | ${statusText}\n`;
+            
+            if ((currentPage + townString).length > DISCORD_DESCRIPTION_LIMIT - 300) {
+                pages.push(currentPage);
+                currentPage = townString;
+            } else {
+                currentPage += townString;
+            }
+        }
+        
+        if (currentPage) {
+            pages.push(currentPage);
+        }
+
+        const footer = { 
+            text: `⚠️ Next newday | 🟡 ≤ 3 days | 🟢 ≤ ${daysAhead} days | Nation bonus: ${nationBonus} chunks` 
+        };
+
+        // Send first page
+        const firstEmbed = new EmbedBuilder()
+            .setTitle(`💸 Future Overclaimable Towns - ${nation}${pages.length > 1 ? ` (Page 1/${pages.length})` : ''}`)
+            .setDescription(pages[0])
+            .setColor('#FF0000')
+            .addFields(
+                { name: 'Towns Found', value: townAnalysis.length.toString(), inline: true },
+                { name: 'Nation Bonus', value: `${nationBonus} chunks`, inline: true },
+                { name: 'Time Range', value: `≤${daysAhead} days`, inline: true }
+            )
+            .setTimestamp()
+            .setFooter(footer);
+
+        const response = { embeds: [firstEmbed], ephemeral: isEphemeral };
+        const sentMessage = isEphemeral ? await interaction.followUp(response) : await interaction.editReply(response);
+
+        // Send follow-up pages if any
+        for (let i = 1; i < pages.length; i++) {
+            const embed = new EmbedBuilder()
+                .setTitle(`💸 Future Overclaimable Towns - ${nation} (Page ${i + 1}/${pages.length})`)
+                .setDescription(pages[i])
+                .setColor('#FF0000')
+                .setTimestamp()
+                .setFooter(footer);
+
+            const pageResponse = { embeds: [embed], ephemeral: isEphemeral };
+            await interaction.followUp(pageResponse);
+        }
+
+    } catch (error) {
+        console.error('Error in overclaimable list:', error);
+        const response = { content: 'An error occurred while calculating overclaimable information.', ephemeral: isEphemeral };
+        return isEphemeral ? interaction.followUp(response) : interaction.editReply(response);
     }
 }
 

@@ -136,22 +136,28 @@ async function handleOverclaimInfo(interaction) {
         
         const residentPurgeDates = residentsData.map(resident => {
             const lastOnline = new Date(resident.timestamps.lastOnline);
-            const daysSinceLogin = Math.floor((now - lastOnline) / (24 * 60 * 60 * 1000));
-            const daysUntilPurge = Math.max(0, 42 - daysSinceLogin);
+            const daysUntilPurge = TimeUtils.calculateDaysUntilPurge(lastOnline);
+
+            // Calculate purge date - 42 days from last online, at newday time (6 AM ET)
             const purgeDate = new Date(lastOnline);
             purgeDate.setDate(purgeDate.getDate() + 42);
-            purgeDate.setUTCHours(11, 0, 0, 0); // 6 AM EST = 11 AM UTC
+
+            // Set to the same time as your newday calculation (6 AM ET)
+            const nyTime = new Date(purgeDate.toLocaleString("en-US", { timeZone: "America/New_York" }));
+            nyTime.setHours(6, 0, 0, 0);
+            const offset = purgeDate.getTime() - new Date(purgeDate.toLocaleString("en-US", { timeZone: "America/New_York" })).getTime();
+            purgeDate.setTime(nyTime.getTime() + offset);
             
             return {
                 name: resident.name,
                 purgeDate,
                 daysUntilPurge,
-                willPurgeNextNewday: daysSinceLogin >= 41 && (nextNewday - now) < (24 * 60 * 60 * 1000)
+                willPurgeNextNewday: TimeUtils.willFallNextNewday(lastOnline)
             };
         }).sort((a, b) => a.purgeDate - b.purgeDate);
 
         let futurePurgeScenarios = [];
-        for (let i = 0; i <= residentPurgeDates.length; i++) {
+        for (let i = 1; i <= residentPurgeDates.length - 1; i++) { // Start from 1 to keep at least mayor
             const remainingResidents = currentResidents - i;
             const maxChunksAllowedFuture = (remainingResidents * CHUNKS_PER_RESIDENT) + nationBonus;
             const willBeOverclaimable = currentChunks > maxChunksAllowedFuture;
@@ -162,12 +168,13 @@ async function handleOverclaimInfo(interaction) {
                 
                 futurePurgeScenarios.push({
                     residentsNeeded: i,
-                    date: i > 0 ? residentPurgeDates[i - 1].purgeDate : now,
+                    date: residentPurgeDates[i - 1].purgeDate,
                     maxChunks: maxChunksAllowedFuture,
                     remainingResidents,
                     chunksOver: chunksOverLimitFuture,
                     shieldCost: shieldCostFuture
                 });
+                break; // Only show the first scenario where it becomes overclaimable
             }
         }
 
@@ -273,42 +280,47 @@ async function handleOverclaimList(interaction) {
         const townQueries = nationInfo.towns.map(t => t.uuid);
         const townsData = await EarthMCClient.makeRequest('towns', 'POST', { query: townQueries });
         
-        // Get all mayors for last online data
-        const mayorQueries = townsData.map(t => t.mayor.uuid);
-        const mayorsData = await EarthMCClient.makeRequest('players', 'POST', { query: mayorQueries });
-        
-        const now = new Date();
-        const nextNewday = TimeUtils.getNextNewday();
-        
-        // Process each town
+        // Process each town (no need to get mayor data since we're not using mayor purge logic)
         const townAnalysis = townsData.map(town => {
-            const mayor = mayorsData.find(m => m.uuid === town.mayor.uuid);
-            if (!mayor) return null;
-
             const currentChunks = town.stats.numTownBlocks;
             const currentResidents = town.residents.length;
             const maxChunksAllowed = (currentResidents * CHUNKS_PER_RESIDENT) + nationBonus;
             const isCurrentlyOverclaimed = currentChunks > maxChunksAllowed;
             
-            // Calculate when town will be overclaimable based on mayor purge
+            // Only check if town could become overclaimable through resident purges
+            // (excluding mayor since mayorship transfers automatically)
             let willBeOverclaimable = false;
             let daysUntilOverclaimable = null;
             
             if (!isCurrentlyOverclaimed) {
-                const lastOnline = new Date(mayor.timestamps.lastOnline);
-                const daysSinceLogin = Math.floor((now - lastOnline) / (24 * 60 * 60 * 1000));
-                const daysUntilMayorPurge = Math.max(0, 42 - daysSinceLogin);
+                // Check if town would be overclaimable with fewer residents
+                // Minimum is 1 resident (the mayor) plus nation bonus
+                const minChunksAllowed = (1 * CHUNKS_PER_RESIDENT) + nationBonus;
                 
-                // If mayor purges, town becomes ruins and overclaimable
-                if (daysUntilMayorPurge <= daysAhead) {
-                    willBeOverclaimable = true;
-                    daysUntilOverclaimable = daysUntilMayorPurge;
+                if (currentChunks > minChunksAllowed) {
+                    // Town could become overclaimable if enough non-mayor residents purge
+                    // For this list, we'll only flag towns that are very close to being overclaimable
+                    // (need 3 or fewer residents to purge within the time frame)
+                    for (let lostResidents = 1; lostResidents <= Math.min(3, currentResidents - 1); lostResidents++) {
+                        const remainingResidents = currentResidents - lostResidents;
+                        const futureMaxChunks = (remainingResidents * CHUNKS_PER_RESIDENT) + nationBonus;
+                        
+                        if (currentChunks > futureMaxChunks) {
+                            // This would make the town overclaimable
+                            // Estimate time as 2 days per resident (conservative estimate)
+                            const estimatedDays = lostResidents * 2;
+                            if (estimatedDays <= daysAhead) {
+                                willBeOverclaimable = true;
+                                daysUntilOverclaimable = estimatedDays;
+                            }
+                            break;
+                        }
+                    }
                 }
             }
             
             return {
                 ...town,
-                mayor,
                 isCurrentlyOverclaimed,
                 willBeOverclaimable,
                 daysUntilOverclaimable,
@@ -316,7 +328,7 @@ async function handleOverclaimList(interaction) {
                 maxChunksAllowed,
                 chunksOverLimit: Math.max(0, currentChunks - maxChunksAllowed)
             };
-        }).filter(town => town && (town.isCurrentlyOverclaimed || town.willBeOverclaimable))
+        }).filter(town => town.isCurrentlyOverclaimed || town.willBeOverclaimable)
           .sort((a, b) => {
               // Sort: currently overclaimed first, then by days until overclaimable
               if (a.isCurrentlyOverclaimed && !b.isCurrentlyOverclaimed) return -1;
@@ -346,7 +358,7 @@ async function handleOverclaimList(interaction) {
         let currentPage = '';
         
         for (const town of townAnalysis) {
-            const townString = createTownOverclaimString(town, nationBonus, nextNewday);
+            const townString = createTownOverclaimString(town, nationBonus);
             if (!townString) continue;
             
             if ((currentPage + townString).length > DISCORD_DESCRIPTION_LIMIT - 300) {

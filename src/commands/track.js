@@ -43,6 +43,20 @@ const data = new SlashCommandBuilder()
                     .setRequired(false)))
     .addSubcommand(subcommand =>
         subcommand
+            .setName('defend')
+            .setDescription('Monitor for nearby players and get alerted (excludes nation/alliance)')
+            .addStringOption(option =>
+                option.setName('player')
+                    .setDescription('Your player name to monitor around')
+                    .setRequired(true))
+            .addIntegerOption(option =>
+                option.setName('radius')
+                    .setDescription('Alert radius in blocks (default: 100, max: 200)')
+                    .setMinValue(50)
+                    .setMaxValue(200)
+                    .setRequired(false)))
+    .addSubcommand(subcommand =>
+        subcommand
             .setName('stop')
             .setDescription('Stop tracking the current player'))
     .addSubcommand(subcommand =>
@@ -64,15 +78,458 @@ async function execute(interaction) {
     switch (subcommand) {
         case 'start':
             return await handleStartTracking(interaction, userId);
+        case 'defend':
+            return await handleStartDefense(interaction, userId);
         case 'stop':
             return await handleStopTracking(interaction, userId);
         case 'status':
             return await handleTrackingStatus(interaction, userId);
         default:
             return interaction.editReply({
-                content: 'Invalid subcommand. Use `/track start`, `/track stop`, or `/track status`.'
+                content: 'Invalid subcommand. Use `/track start`, `/track defend`, `/track stop`, or `/track status`.'
             });
     }
+}
+
+async function handleStartDefense(interaction, userId) {
+    // Check if user already has an active tracker
+    if (activeTrackers.has(userId)) {
+        return interaction.editReply({
+            content: 'You already have an active tracking session. Use `/track stop` to stop it first.'
+        });
+    }
+
+    const playerName = interaction.options.getString('player');
+    const radius = interaction.options.getInteger('radius') || 100;
+
+    try {
+        // Check if user can receive DMs first
+        try {
+            await interaction.user.send('🛡️ Starting defense monitoring...');
+        } catch (error) {
+            return interaction.editReply({
+                content: 'I cannot send you DMs. Please enable DMs from server members in your Discord privacy settings to use defense monitoring.'
+            });
+        }
+
+        // Check if player exists and is online
+        let playerData;
+        try {
+            const playersResponse = await EarthMCClient.makeRequest('players', 'POST', { 
+                query: [playerName] 
+            });
+            
+            if (!playersResponse || playersResponse.length === 0) {
+                return interaction.editReply({
+                    content: `Player "${playerName}" not found on the server. Please check the spelling and make sure they are registered.`
+                });
+            }
+
+            playerData = playersResponse[0];
+
+            if (!playerData.status?.isOnline) {
+                return interaction.editReply({
+                    content: `Player "${playerData.name}" is currently offline. Defense monitoring only works for online players.`
+                });
+            }
+
+        } catch (error) {
+            console.error('Error checking player online status:', error);
+            return interaction.editReply({
+                content: `Error looking up player "${playerName}": ${error.message}`
+            });
+        }
+
+        // Get player's nation and alliance info for exclusions
+        let playerNation = null;
+        let allianceNations = [];
+        
+        // The player data from POST request should include town/nation info
+        if (playerData.nation?.name) {
+            playerNation = playerData.nation.name;
+            console.log(`Found player nation: ${playerNation}`);
+            
+            // Get alliance data to exclude alliance members
+            try {
+                const axios = require('axios');
+                const allianceResponse = await axios.get('https://emctoolkit.vercel.app/api/aurora/alliances');
+                const alliances = allianceResponse.data;
+                
+                // Find alliances this player's nation belongs to
+                const playerAlliances = alliances.filter(alliance => 
+                    alliance.nations.some(nation => nation.toLowerCase() === playerNation.toLowerCase())
+                );
+                
+                console.log(`Found ${playerAlliances.length} alliances for ${playerNation}`);
+                if (playerAlliances.length > 0) {
+                    console.log(`Player is in alliance(s): ${playerAlliances.map(a => a.allianceName).join(', ')}`);
+                }
+                
+                // Get all nations in those alliances
+                allianceNations = playerAlliances.flatMap(alliance => 
+                    alliance.nations.map(nation => nation.toLowerCase())
+                );
+                
+                console.log(`Total alliance nations to exclude: ${allianceNations.length}`);
+            } catch (error) {
+                console.error('Error fetching alliance data:', error);
+            }
+        } else if (playerData.town?.name) {
+            // Player has a town but no nation
+            console.log(`Player ${playerData.name} is in town ${playerData.town.name} but town has no nation`);
+        } else {
+            console.log(`Player ${playerData.name} has no town or nation`);
+        }
+
+        // Start defense monitoring
+        const defenseTracker = await startDefenseMonitoring(
+            playerData.name, 
+            radius, 
+            playerNation, 
+            allianceNations
+        );
+
+        // Store tracker info
+        activeTrackers.set(userId, {
+            tracker: defenseTracker,
+            playerName: playerData.name,
+            startTime: new Date(),
+            lastUpdate: null,
+            updateCount: 0,
+            isDefenseMode: true,
+            radius,
+            playerNation,
+            allianceNations: allianceNations.length
+        });
+
+        // Set up event listeners
+        setupDefenseListeners(defenseTracker, interaction.user, playerData.name, radius, playerNation);
+
+        const embed = new EmbedBuilder()
+            .setTitle('🛡️ Defense Monitoring Started')
+            .setDescription(`Now monitoring for enemies near **${playerData.name}**`)
+            .addFields(
+                { name: 'Alert Radius', value: `${radius} blocks`, inline: true },
+                { name: 'Your Nation', value: playerNation || 'None', inline: true },
+                { name: 'Alliance Nations', value: allianceNations.length.toString(), inline: true },
+                { name: 'Player Status', value: '🟢 Online', inline: true },
+                { name: 'Exclusions', value: 'Nation & Alliance members', inline: true },
+                { name: 'DM Alerts', value: 'Enabled ✅', inline: true }
+            )
+            .setColor('#FF6B35')
+            .setTimestamp()
+            .setFooter({ text: 'Use /track stop to end monitoring' });
+
+        return interaction.editReply({ embeds: [embed] });
+
+    } catch (error) {
+        console.error('Error starting defense monitoring:', error);
+        return interaction.editReply({
+            content: `Error starting defense monitoring: ${error.message}`
+        });
+    }
+}
+
+async function startDefenseMonitoring(playerName, radius, playerNation, allianceNations) {
+    const EventEmitter = require('events');
+    const defenseTracker = new EventEmitter();
+    
+    let monitoringInterval;
+    let isMonitoring = true;
+    let lastKnownNearbyPlayers = new Set();
+
+    // Load EarthMC module for GPS tracking
+    const { Aurora } = await loadEarthMC();
+
+    const checkNearbyPlayers = async () => {
+        if (!isMonitoring) return;
+        
+        try {
+            console.log(`=== Defense monitoring check for ${playerName} ===`);
+            
+            // Use EarthMC-NPM to get player location with GPS
+            let targetPlayer;
+            try {
+                targetPlayer = await Aurora.Players.get(playerName);
+                if (!targetPlayer) {
+                    console.log(`Target player ${playerName} not found via EarthMC-NPM`);
+                    defenseTracker.emit('playerOffline', { playerName });
+                    return;
+                }
+                
+                console.log(`Target player ${playerName} location: x=${targetPlayer.x}, z=${targetPlayer.z}, online=${targetPlayer.online}`);
+                
+                if (!targetPlayer.online) {
+                    console.log(`Target player ${playerName} is offline`);
+                    defenseTracker.emit('playerOffline', { playerName });
+                    return;
+                }
+                
+                // If player doesn't have coordinates (underground), we can't monitor
+                if (targetPlayer.x === undefined || targetPlayer.z === undefined) {
+                    console.log(`Target player ${playerName} has no coordinates (underground)`);
+                    return;
+                }
+            } catch (playerError) {
+                console.log(`Could not get location for ${playerName}:`, playerError.message);
+                // Player might be underground or offline
+                return;
+            }
+            
+            // Get all online players using EarthMC-NPM
+            let allPlayers;
+            try {
+                allPlayers = await Aurora.Players.online();
+                console.log(`Found ${allPlayers.length} online players via EarthMC-NPM`);
+            } catch (playersError) {
+                console.error('Error getting online players:', playersError);
+                return;
+            }
+            
+            const onlinePlayers = allPlayers.filter(p => 
+                p.name !== playerName && 
+                p.x !== undefined && p.z !== undefined // Only players with visible coordinates
+            );
+
+            console.log(`Filtered online players with coordinates (excluding ${playerName}): ${onlinePlayers.length}`);
+            console.log(`First few online players:`, onlinePlayers.slice(0, 3).map(p => ({ 
+                name: p.name, 
+                x: p.x, 
+                z: p.z, 
+                nation: p.nation || 'None' 
+            })));
+
+            const nearbyPlayers = [];
+            
+            for (const player of onlinePlayers) {
+                // Calculate distance
+                const distance = Math.sqrt(
+                    Math.pow(player.x - targetPlayer.x, 2) + 
+                    Math.pow(player.z - targetPlayer.z, 2)
+                );
+                
+                console.log(`Player ${player.name}: distance=${Math.round(distance)}, nation=${player.nation || 'None'}, coords=(${player.x}, ${player.z})`);
+                
+                if (distance <= radius) {
+                    console.log(`✓ ${player.name} is within ${radius} block radius (${Math.round(distance)} blocks)`);
+                    
+                    // Check if player should be excluded
+                    let shouldExclude = false;
+                    let exclusionReason = '';
+                    
+                    // Exclude if same nation
+                    if (playerNation && player.nation === playerNation) {
+                        shouldExclude = true;
+                        exclusionReason = `same nation (${playerNation})`;
+                    }
+                    
+                    // Exclude if in alliance
+                    if (player.nation && allianceNations.includes(player.nation.toLowerCase())) {
+                        shouldExclude = true;
+                        exclusionReason = `allied nation (${player.nation})`;
+                    }
+                    
+                    if (shouldExclude) {
+                        console.log(`✗ Excluding ${player.name} - ${exclusionReason}`);
+                    } else {
+                        console.log(`⚠️ Adding ${player.name} as threat - distance: ${Math.round(distance)}, nation: ${player.nation || 'None'}`);
+                        nearbyPlayers.push({
+                            name: player.name,
+                            distance: Math.round(distance),
+                            nation: player.nation || 'None',
+                            town: player.town || 'None',
+                            x: player.x,
+                            z: player.z
+                        });
+                    }
+                } else {
+                    console.log(`✗ ${player.name} is too far (${Math.round(distance)} > ${radius} blocks)`);
+                }
+            }
+
+            console.log(`Final nearby threats: ${nearbyPlayers.length}`);
+
+            // Check for new threats
+            const currentNearbyNames = new Set(nearbyPlayers.map(p => p.name));
+            const newThreats = nearbyPlayers.filter(p => !lastKnownNearbyPlayers.has(p.name));
+            const leftPlayers = [...lastKnownNearbyPlayers].filter(name => !currentNearbyNames.has(name));
+
+            if (newThreats.length > 0) {
+                console.log(`🚨 NEW THREATS DETECTED: ${newThreats.map(t => t.name).join(', ')}`);
+            }
+            if (leftPlayers.length > 0) {
+                console.log(`✅ Threats left: ${leftPlayers.join(', ')}`);
+            }
+
+            // Emit events for new threats
+            if (newThreats.length > 0) {
+                defenseTracker.emit('newThreats', {
+                    playerName,
+                    threats: newThreats,
+                    totalNearby: nearbyPlayers.length
+                });
+            }
+
+            // Emit events for players leaving
+            if (leftPlayers.length > 0) {
+                defenseTracker.emit('threatsLeft', {
+                    playerName,
+                    leftPlayers,
+                    remaining: nearbyPlayers.length
+                });
+            }
+
+            lastKnownNearbyPlayers = currentNearbyNames;
+            console.log(`=== End defense monitoring check ===`);
+            
+        } catch (error) {
+            console.error('Defense monitoring error:', error);
+            defenseTracker.emit('monitoringError', error);
+        }
+    };
+
+    // Check every 10 seconds
+    monitoringInterval = setInterval(checkNearbyPlayers, 10000);
+    
+    // Initial check
+    setTimeout(checkNearbyPlayers, 2000);
+    
+    // Add stop method
+    defenseTracker.stop = () => {
+        isMonitoring = false;
+        if (monitoringInterval) {
+            clearInterval(monitoringInterval);
+        }
+    };
+
+    defenseTracker.markAsStopped = () => {
+        isMonitoring = false;
+    };
+
+    return defenseTracker;
+}
+
+function setupDefenseListeners(tracker, user, playerName, radius, playerNation) {
+    const userId = user.id;
+    let hasBeenStopped = false;
+
+    tracker.on('playerOffline', async (data) => {
+        if (hasBeenStopped) return;
+        hasBeenStopped = true;
+        
+        try {
+            const embed = new EmbedBuilder()
+                .setTitle('📴 Player Offline')
+                .setDescription(`**${playerName}** went offline`)
+                .addFields({ 
+                    name: 'Status', 
+                    value: '🔴 Defense monitoring stopped - player is no longer online', 
+                    inline: false 
+                })
+                .setColor('#FF0000')
+                .setTimestamp();
+
+            await user.send({ embeds: [embed] });
+            
+            // Stop tracking and remove from active trackers
+            const trackerInfo = activeTrackers.get(userId);
+            if (trackerInfo) {
+                try {
+                    if (trackerInfo.tracker && typeof trackerInfo.tracker.stop === 'function') {
+                        trackerInfo.tracker.stop();
+                    }
+                } catch (stopError) {
+                    console.error('Error stopping defense tracker:', stopError);
+                }
+                activeTrackers.delete(userId);
+            }
+            
+        } catch (dmError) {
+            console.error('Failed to send offline DM:', dmError);
+        }
+    });
+
+    tracker.on('newThreats', async (data) => {
+        if (hasBeenStopped) return;
+        
+        try {
+            console.log(`Sending threat alert DM to user ${userId} for ${data.threats.length} threats`);
+            
+            const embed = new EmbedBuilder()
+                .setTitle('⚠️ Enemy Players Detected!')
+                .setDescription(`**${data.threats.length}** enemy player(s) detected near **${playerName}**`)
+                .setColor('#FF0000')
+                .setTimestamp();
+
+            let threatsList = '';
+            for (const threat of data.threats.slice(0, 5)) { // Limit to 5 threats to avoid embed limits
+                threatsList += `**${threat.name}** (${threat.nation})\n`;
+                threatsList += `┗ Distance: ${threat.distance} blocks\n`;
+                threatsList += `┗ Location: ${threat.x}, ${threat.z}\n\n`;
+            }
+
+            if (data.threats.length > 5) {
+                threatsList += `*...and ${data.threats.length - 5} more*`;
+            }
+
+            embed.addFields(
+                { name: 'Threats Detected', value: threatsList, inline: false },
+                { name: 'Alert Radius', value: `${radius} blocks`, inline: true },
+                { name: 'Total Nearby', value: data.totalNearby.toString(), inline: true }
+            );
+
+            await user.send({ embeds: [embed] });
+            console.log(`Successfully sent threat alert DM to user ${userId}`);
+            
+            // Update tracker info
+            const trackerInfo = activeTrackers.get(userId);
+            if (trackerInfo) {
+                trackerInfo.lastUpdate = new Date();
+                trackerInfo.updateCount++;
+            }
+        } catch (dmError) {
+            console.error('Failed to send threat detection DM:', dmError);
+        }
+    });
+
+    tracker.on('threatsLeft', async (data) => {
+        if (hasBeenStopped) return;
+        
+        try {
+            const embed = new EmbedBuilder()
+                .setTitle('✅ Threats Cleared')
+                .setDescription(`**${data.leftPlayers.length}** player(s) left the area around **${playerName}**`)
+                .addFields(
+                    { name: 'Players Left', value: data.leftPlayers.join(', '), inline: false },
+                    { name: 'Remaining Threats', value: data.remaining.toString(), inline: true }
+                )
+                .setColor('#00FF00')
+                .setTimestamp();
+
+            await user.send({ embeds: [embed] });
+            
+            // Update tracker info
+            const trackerInfo = activeTrackers.get(userId);
+            if (trackerInfo) {
+                trackerInfo.lastUpdate = new Date();
+                trackerInfo.updateCount++;
+            }
+        } catch (dmError) {
+            console.error('Failed to send threat cleared DM:', dmError);
+        }
+    });
+
+    tracker.on('monitoringError', async (error) => {
+        if (hasBeenStopped) return;
+        
+        console.error('Defense monitoring error:', error);
+        // Don't spam user with every error, just log them
+    });
+
+    // Add a method to mark this tracker as stopped
+    tracker.markAsStopped = () => {
+        hasBeenStopped = true;
+    };
 }
 
 async function handleStartTracking(interaction, userId) {
@@ -230,8 +687,10 @@ async function handleStopTracking(interaction, userId) {
         const seconds = duration % 60;
 
         const embed = new EmbedBuilder()
-            .setTitle('⏹️ Player Tracking Stopped')
-            .setDescription(`Stopped tracking **${trackerInfo.playerName}**`)
+            .setTitle('⏹️ Tracking Stopped')
+            .setDescription(trackerInfo.isDefenseMode ? 
+                `Stopped defense monitoring for **${trackerInfo.playerName}**` :
+                `Stopped tracking **${trackerInfo.playerName}**`)
             .addFields(
                 { name: 'Duration', value: `${minutes}m ${seconds}s`, inline: true },
                 { name: 'Updates Received', value: trackerInfo.updateCount.toString(), inline: true }
@@ -265,15 +724,25 @@ async function handleTrackingStatus(interaction, userId) {
 
     const embed = new EmbedBuilder()
         .setTitle('📊 Tracking Status')
-        .setDescription(`Currently tracking **${trackerInfo.playerName}**`)
+        .setDescription(trackerInfo.isDefenseMode ? 
+            `Defense monitoring **${trackerInfo.playerName}**` :
+            `Currently tracking **${trackerInfo.playerName}**`)
         .addFields(
             { name: 'Duration', value: `${minutes}m ${seconds}s`, inline: true },
             { name: 'Updates Received', value: trackerInfo.updateCount.toString(), inline: true },
             { name: 'Last Update', value: trackerInfo.lastUpdate ? `<t:${Math.floor(trackerInfo.lastUpdate.getTime() / 1000)}:R>` : 'None yet', inline: true }
         )
-        .setColor('#0099FF')
+        .setColor(trackerInfo.isDefenseMode ? '#FF6B35' : '#0099FF')
         .setTimestamp()
         .setFooter({ text: 'Use /track stop to end tracking' });
+
+    if (trackerInfo.isDefenseMode) {
+        embed.addFields(
+            { name: 'Alert Radius', value: `${trackerInfo.radius} blocks`, inline: true },
+            { name: 'Your Nation', value: trackerInfo.playerNation || 'None', inline: true },
+            { name: 'Alliance Nations', value: trackerInfo.allianceNations.toString(), inline: true }
+        );
+    }
 
     return interaction.editReply({ embeds: [embed] });
 }
