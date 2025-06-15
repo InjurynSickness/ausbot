@@ -55,7 +55,7 @@ client.on('interactionCreate', async interaction => {
        if (!command) return;
 
        // Admin commands - only allow owner
-       if (['authorize', 'whitelist'].includes(interaction.commandName)) {
+       if (['authorize', 'whitelist', 'forceglobal', 'debugguild'].includes(interaction.commandName)) {
            if (interaction.user.id !== '1175990722437066784') {
                return interaction.reply({
                    content: 'Not authorized to use this command',
