@@ -2,7 +2,7 @@ const fs = require('fs/promises');
 const path = require('path');
 
 class Config {
-    static token = "MTMxODQyMzQ4MTg1NTI0NjMzNg.GnvwX6.MFFNf0A2_i4xceb4WzJj90BFsuxQGqlzzrEHTY";
+    static token = "errrrrr";
     static whitelistedUsers = new Set(['1175990722437066784']);
     static whitelistEnabled = true; // Default to whitelist enabled
     static baseUrl = 'https://api.earthmc.net/v3/aurora';
